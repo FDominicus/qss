@@ -115,6 +115,9 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
 (defun qss ()
   "Open the qss REPL: type a pipe, see the table."
   (interactive)
+  ;; All sources (nu, sqlite ...), also when this command was autoloaded
+  ;; on its own.
+  (require 'qss)
   (let ((buf (get-buffer-create "*qss*")))
     (with-current-buffer buf
       (unless (derived-mode-p 'qss-repl-mode)

@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -48,6 +48,7 @@
 ;;   qss-table.el     tables as values, display, sources `files' and `processes'
 ;;   qss-pipe.el      the words and `qss->', `qss-eval'
 ;;   qss-sql.el       SQLite as a source; the words become SQL
+;;   qss-nu.el        Nushell as a source: (nu "ps | where cpu > 5")
 ;;   qss-repl.el      M-x qss, the REPL
 ;;   qss-examples.el  M-x qss-examples
 
@@ -57,6 +58,7 @@
 (require 'qss-pipe)
 (require 'qss-sql)
 (require 'qss-repl)
+(require 'qss-nu)
 
 ;;; Tests
 

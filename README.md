@@ -48,7 +48,27 @@ Or clone the repository, put the directory on your `load-path` and
 | `(processes)` | running processes |
 | `(sqlite FILE TABLE)` | rows of an SQLite table, as a query |
 | `(tables FILE)` | the tables of an SQLite file; `RET` shows the rows |
+| `(nu COMMAND)` | the result of a Nushell command |
 | any list | its elements; property lists are rows, other values have the column `value` |
+
+### Nushell
+
+Everything Nushell produces becomes a table, and the qss words go on
+from there:
+
+```
+qss> (nu "ps | where cpu > 5")
+qss> (nu "open export.csv") (where (> :amount 100)) (sort-by date :desc)
+qss> (nu "sys disks")
+qss> (nu "ls **/*.el") (sort-by size :desc) (first 10)
+```
+
+`(nu COMMAND)` runs `nu -c "(COMMAND) | to json --raw"` in
+`default-directory` (on the remote host in a TRAMP buffer) and reads
+the JSON: a list of records becomes the rows, a single record rows of
+`column` and `value`. `RET` on a row from `ls` opens the file.
+`qss-nu-program` names the program, `qss-nu-arguments` its arguments
+(by default your config files are not loaded).
 
 ## Words
 

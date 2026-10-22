@@ -32,7 +32,8 @@
 (ert-deftest qss-examples-all-run ()
   "Every example runs without an error."
   (qss-etest--with-fresh-db
-    (dolist (example qss-examples)
+    (dolist (example (cl-remove-if (lambda (e) (and (cddr e) (not (eval (nth 2 e) t))))
+                                   qss-examples))
       (let ((value (eval (cadr example) t)))
         (when (or (qss-table-p value) (qss-relation-p value))
           (should (listp (qss-collect value))))))))

@@ -170,9 +170,26 @@
               (where (not-null :status))
               (each (list :order-no (plist-get it :order-no)
                           :name (cdr (assq (plist-get it :customer-no) names))
-                          :amount (plist-get it :amount)))))))
-  "Examples of qss: a list of (TITLE FORM).
-FORM is evaluated with lexical binding; see `qss-examples'.")
+                          :amount (plist-get it :amount))))))
+
+    ("Nushell: any command becomes a table (needs nu)"
+     (qss-> (nu "ls") (where (= :type "file")) (sort-by size :desc) (first 5))
+     (executable-find qss-nu-program))
+
+    ("Nushell: a record is shown as column and value (needs nu)"
+     (qss-> (nu "sys host"))
+     (executable-find qss-nu-program))
+
+    ("Nushell: data from a file Nushell can open, then qss words (needs nu)"
+     ;; nu reads CSV, JSON, TOML, YAML, Excel, SQLite ...
+     (let ((csv (expand-file-name "qss-example.csv" temporary-file-directory)))
+       (with-temp-file csv (insert "item,amount\nnails,12.5\nscrews,99\nglue,4\n"))
+       (qss-> (nu (format "open %s" csv)) (where (> :amount 10)) (sort-by amount :desc)))
+     (executable-find qss-nu-program)))
+
+  "Examples of qss: a list of (TITLE FORM [CONDITION]).
+FORM is evaluated with lexical binding; see `qss-examples'.  If
+CONDITION is given and evaluates to nil, the example is skipped.")
 
 ;;; ------------------------------------------------------------------
 ;;; Showing the examples
@@ -232,8 +249,11 @@ The [show] button after a table or a query displays it."
         (dolist (example qss-examples)
           (let* ((title (car example))
                  (form (cadr example))
-                 (value (condition-case err (eval form t)
-                          (error (list 'error (error-message-string err))))))
+                 (ready (or (null (cddr example)) (eval (nth 2 example) t)))
+                 (value (if (not ready)
+                            "skipped: needs Nushell (see `qss-nu-program')"
+                          (condition-case err (eval form t)
+                            (error (list 'error (error-message-string err)))))))
             (insert ";;; " title "\n")
             (insert (qss-examples--format form) "\n")
             (insert ";; => " (replace-regexp-in-string
