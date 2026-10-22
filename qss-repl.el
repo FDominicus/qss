@@ -102,7 +102,7 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
    ";;   (sqlite (qss-demo-database) \"Orders\") (where (> :amount 100))\n"
    ";;   !git log --oneline -5       runs a program, no shell\n"
    ";;   cd ~/src                    changes the directory\n"
-   ";; A line starting with a word, e.g. (where ...), continues the last table.\n"
+   ";; A line starting with | or a word, e.g. (where ...), continues the last table.\n"
    ";; RET/a/S on a table row; M-p/M-n history; TAB completes; M-x qss-examples.\n"))
 
 ;;; ------------------------------------------------------------------

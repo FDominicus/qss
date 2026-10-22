@@ -2,7 +2,8 @@
 
 qss brings the idea of [Nushell](https://www.nushell.sh/) to Emacs: data
 as tables, and one small vocabulary that works on all of them — files,
-processes, property lists, rows of an SQLite table.
+processes, property lists, rows of an SQLite table, and whatever Nushell
+itself produces.
 
 ```
 M-x qss
@@ -16,11 +17,30 @@ qss> (select name size)
 
 `M-x qss` opens a REPL: type a pipe, the table appears right below.
 The rows stay what they are: `RET` on a row opens the file, `a` offers
-its actions, `S` sorts by the column at point. A line that starts with
-a word, like `(select name size)` above, continues the table before it.
-`M-p`/`M-n` walk the history, `TAB` completes words, sources and column
-names, `[buffer]` opens a table in a buffer of its own, where `g` reads
-the source again.
+its actions.
+
+A line that starts with a word, like `(select name size)` above, or
+with `|`, continues the last table; a line that starts with a source,
+like `(files)` or `(nu "...")`, starts a new one:
+
+```
+qss> (files "~/Downloads")
+qss> | (nu "where size > 100mb")
+qss> | (sort-by size :desc)
+```
+
+| Key | In the REPL |
+|---|---|
+| `RET` | on the input line: run it; on a table row: open the row |
+| `a` | on a table row: the actions of the row |
+| `S` | on a table row: sort by the column at point |
+| `M-p` / `M-n` | previous / next input |
+| `TAB` | complete words, sources, column names and file names |
+| `C-c M-o` | clear the buffer |
+| `[buffer]` | show the table in a buffer of its own |
+
+In a table buffer `RET`, `a` and `S` work the same, and `g` reads the
+source again.
 
 `M-x qss-eval` does the same from the minibuffer, with the result in a
 table buffer.
@@ -117,33 +137,25 @@ qss> (files) (where (> :size 1000)) (nu "sort-by modified -r") (first 5)
 The rows go over as NUON with their types: time columns arrive as
 datetimes, size columns as file sizes and duration columns as
 durations, so `where size > 10kb` and `where modified > 2026-01-01`
-work. A single value (like a sum) comes
-back as it is; nothing (like from `save`) comes back as `nil`.
-`g` in the table buffer runs the whole pipe again.
+work. A single value (like a sum) comes back as it is; nothing (like
+from `save`) comes back as `nil`. `g` in the table buffer runs the whole
+pipe again, the qss part and the Nushell part.
 
-In the REPL a line that starts with `|` goes on with the last table:
-
-```
-qss> (files "~/Downloads")
-qss> | (nu "where size > 100mb")
-qss> | (sort-by size :desc)
-```
-
-A line that starts with a word like `(where ...)` does that as well; a
-line that starts with a source like `(nu "...")` or `(files)` starts a
-new table.
+Nushell must be installed (tested with 0.116); without it everything
+else works.
 
 ## Words
 
 | Word | Meaning |
 |---|---|
-| `(where COND)` | rows for which COND holds |
+| `(where COND)` | rows for which COND holds; `filter` is the same |
 | `(select COL...)` / `(reject COL...)` | keep / drop columns |
 | `(sort-by COL [:desc])` | sort; missing values last |
 | `(first [N])` / `(last [N])` | the first / last N rows |
 | `(get COL)` | the values of one column |
 | `(group-by COL)` | one row per value with a count; `RET` shows the group |
 | `(each FORM)` | FORM with `it` bound to each row; results are the new rows |
+| `(nu COMMAND)` | the table through a Nushell command (see above) |
 | `columns` | the column names |
 | `count` | the number of rows |
 | `collect` | the rows as a Lisp list |
@@ -182,7 +194,7 @@ creates a small one with the tables `Customers` and `Orders`; all
 SQLite examples here use it.
 
 ```
-qss: (tables (qss-demo-database))
+qss> (tables (qss-demo-database))
 ```
 
 On an SQLite source the pipe stays a query until the rows are needed.
@@ -192,7 +204,7 @@ become SQL with `?` parameters; a word that cannot (a condition with
 memory.
 
 ```
-qss: (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (sort-by order-date :desc) (first 20) sql
+qss> (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (sort-by order-date :desc) (first 20) sql
 SELECT *
 FROM "Orders"
 WHERE ("Amount" > ?)
@@ -215,6 +227,12 @@ Display fetches at most `qss-sql-display-limit` rows (1000).
 ;; => ((:order-no 4711 :amount 120.0) ...)
 
 (qss-display (qss-> (files user-emacs-directory) (where (like :name "%.el"))))
+
+(qss-> (files) (nu "get size | math sum"))
+;; => 1234567
+
+(qss-nuon-read "[[name, size]; [foo, 10kb]]")
+;; => (((name . "foo") (size . #s(qss-nuon-size 10000))))
 ```
 
 `qss->` returns a table, or a query on SQLite; `collect` turns either
@@ -260,7 +278,8 @@ From a shell, from any directory:
 emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
 ```
 
-The SQLite tests are skipped when Emacs has no SQLite.
+The SQLite tests are skipped when Emacs has no SQLite, the Nushell tests
+when `nu` is not installed.
 
 ## License
 
