@@ -70,6 +70,8 @@ with a few files there, so the tests do not depend on ~/.emacs.d."
     (should (= 245.5 (qss-etest--value "Using the rows in Lisp: the total of the paid orders")))
     (should (equal (car (qss-collect (qss-etest--value "Joining by hand: orders with the customer's name")))
                    '(:order-no 4711 :name "Anna Meier" :amount 120.0)))
+    (should (equal (qss-etest--value "Storing: a pipe into SQLite, and on from there as a query")
+                   '(4715 4713)))
     (should (string-prefix-p "| name        | city     | since      |\n|-------------+----------+------------|\n| Anna Meier  | Bruchsal | 2019-03-01 |\n"
                              (qss-etest--value "Text: a table as Org, to paste into a note (w in a table does the same)")))
     (should (string-match-p "\\`name,size,modified\n\\(.*,[0-9]+,[0-9-]+ [0-9:]+\n\\)\\{3\\}\\'"

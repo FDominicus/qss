@@ -40,11 +40,30 @@
 ;;
 ;; Rows are property lists (:customer-no 10027 :name "...").  Display
 ;; fetches at most `qss-sql-display-limit' rows; `count' counts all.
+;;
+;; The other way: (into sqlite "Name") stores the table of a pipe in
+;; `qss-database' (or :file FILE) and returns it as a query, so the
+;; words go on there.  An existing table needs :replace or :append.
+;; Sizes and durations are stored as INTEGER (bytes, nanoseconds),
+;; times as text in `qss-time-format'; the qss types are recorded in
+;; the table _qss_columns, so sizes show as 9.8k again.  A file row
+;; keeps its path, so RET on the stored row opens the file.
+;;
+;;   (qss-> (files "~") (where (> :size "10mb")) (into sqlite "big-files"))
+;;   (qss-> (sqlite "big-files") (sort-by size :desc))     ; from qss-database
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'sqlite)                       ; with-sqlite-transaction
 (require 'qss-pipe)
+
+(defcustom qss-database (locate-user-emacs-file "qss.sqlite3")
+  "The central SQLite file of qss.
+\=(into sqlite \"Name\") stores there, (sqlite \"Name\") and (tables)
+read from there, unless a file is given."
+  :type 'file
+  :group 'qss)
 
 (defcustom qss-sql-display-limit 1000
   "Maximum number of rows a query fetches for display."
@@ -101,7 +120,13 @@
 
 (defvar qss-sql--schemas (make-hash-table :test #'equal)
   "File -> (TIME . TABLES).
-TABLES is a list of (NAME . COLUMNS), COLUMNS a list of (KEY NAME TYPE).")
+TABLES is a list of (NAME . COLUMNS), COLUMNS a list of (KEY NAME TYPE
+QSS-TYPE).  QSS-TYPE is the column type of qss (`size', `duration',
+`number', `time') recorded by `into', or nil.")
+
+(defconst qss-sql--types-table "_qss_columns"
+  "Table in which `into' records the qss types of the columns it writes.
+Not shown by `tables'.")
 
 (defmacro qss-sql--with-db (var file &rest body)
   "Run BODY with VAR bound to an open SQLite connection to FILE."
@@ -124,20 +149,34 @@ TABLES is a list of (NAME . COLUMNS), COLUMNS a list of (KEY NAME TYPE).")
         (cdr cached)
       (let ((tables
              (qss-sql--with-db db file
-               (mapcar (lambda (row)
-                         (let ((name (car row)))
-                           (cons name
-                                 (mapcar (lambda (col)
-                                           (list (qss-sql-name-key (nth 1 col)) (nth 1 col)
-                                                 (or (nth 2 col) "")))
-                                         (sqlite-select
-                                          db (format "PRAGMA table_info(%s)" (qss-sql-quote name)))))))
-                       (sqlite-select db "SELECT name FROM sqlite_master
-                                          WHERE type IN ('table','view')
-                                            AND name NOT LIKE 'sqlite_%' ORDER BY name")))))
+               (let ((qss-types (qss-sql--read-types db)))
+                 (mapcar (lambda (row)
+                           (let ((name (car row)))
+                             (cons name
+                                   (mapcar (lambda (col)
+                                             (list (qss-sql-name-key (nth 1 col)) (nth 1 col)
+                                                   (or (nth 2 col) "")
+                                                   (cdr (assoc (cons (downcase name) (nth 1 col))
+                                                               qss-types))))
+                                           (sqlite-select
+                                            db (format "PRAGMA table_info(%s)" (qss-sql-quote name)))))))
+                         (sqlite-select db "SELECT name FROM sqlite_master
+                                            WHERE type IN ('table','view')
+                                              AND name NOT LIKE 'sqlite_%'
+                                              AND substr(name, 1, 5) <> '_qss_'
+                                            ORDER BY name"))))))
         (dolist (tab tables) (qss-sql--check-collisions (car tab) (cdr tab)))
         (puthash file (cons mtime tables) qss-sql--schemas)
         tables))))
+
+(defun qss-sql--read-types (db)
+  "Return the qss types recorded in DB: ((TABLE . COLUMN) . TYPE) ...
+TABLE is in lower case: SQLite does not distinguish case in names."
+  (when (sqlite-select db "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
+                       (vector qss-sql--types-table))
+    (mapcar (lambda (row) (cons (cons (downcase (nth 0 row)) (nth 1 row)) (intern (nth 2 row))))
+            (sqlite-select db (format "SELECT \"table\", \"column\", \"type\" FROM %s"
+                                      (qss-sql-quote qss-sql--types-table))))))
 
 (defun qss-sql--check-collisions (table columns)
   "Signal an error if two COLUMNS of TABLE map to the same key."
@@ -174,8 +213,14 @@ most important first; SQL is the quoted column name.  LIMIT: a number or nil.  P
 select/reject; then the query names its columns.  TITLE: the pipe so far."
   file table columns inner wheres order limit projected title)
 
-(defun qss-sqlite (file table)
-  "Return the table TABLE of the SQLite file FILE as a query."
+(defun qss-sqlite (file &optional table)
+  "Return the table TABLE of the SQLite file FILE as a query.
+With one argument, FILE is the name of a table in `qss-database'."
+  (unless table
+    (when (string-match-p "[/\\]\\|\\.\\(?:sqlite3?\\|db\\)\\'" file)
+      (user-error "%s looks like a file: give the table too, or use (tables %S)" file file))
+    (setq table file
+          file qss-database))
   (let* ((file (qss-sql--file file))
          (tab (qss-sql--find-table file table)))
     (qss-relation--make :file file :table (car tab) :columns (cdr tab)
@@ -223,7 +268,7 @@ The slots to set are in CHANGES, a property list of slot keywords and values."
 
 (defun qss-sql--value (v)
   "Return the Lisp value V as an SQLite value; times as text like in the database."
-  (cond ((qss--time-p v) (format-time-string "%Y-%m-%d %H:%M:%S" v))
+  (cond ((qss--time-p v) (format-time-string qss-time-format v))
         ((eq v t) 1)
         ((and (symbolp v) v) (symbol-name v))
         (t v)))
@@ -356,16 +401,21 @@ numbers where `qss-sql--quantities-p' says so."
 
 (defun qss-sql--specs (rel rows)
   "Return the column specs of REL for ROWS.
-A column is a number column if all its values are numbers."
-  (mapcar (lambda (key)
-            (let ((kw (intern (format ":%s" key))))
-              (if (and rows
-                       (cl-some (lambda (r) (plist-get r kw)) rows)
-                       (cl-every (lambda (r) (let ((v (plist-get r kw))) (or (null v) (numberp v))))
-                                 rows))
-                  (list key :type 'number)
-                key)))
-          (mapcar #'car (qss-relation-columns rel))))
+A column written by `into' as size, duration or number has that type
+again; otherwise a column is a number column if all its values are
+numbers.  Times are stored as text and stay text."
+  (mapcar (lambda (col)
+            (let* ((key (car col))
+                   (qss-type (nth 3 col))
+                   (kw (intern (format ":%s" key))))
+              (cond ((memq qss-type '(size duration number)) (list key :type qss-type))
+                    ((and rows
+                          (cl-some (lambda (r) (plist-get r kw)) rows)
+                          (cl-every (lambda (r) (let ((v (plist-get r kw))) (or (null v) (numberp v))))
+                                    rows))
+                     (list key :type 'number))
+                    (t key))))
+          (qss-relation-columns rel)))
 
 (defun qss-sql--table (rel rows title)
   "Return a table called TITLE with ROWS of REL; its source is REL."
@@ -475,10 +525,10 @@ A column is a number column if all its values are numbers."
   "A table of the SQLite file FILE: its NAME and COLUMNS."
   file name columns)
 
-(defun qss-tables (file)
-  "Return the tables of the SQLite file FILE.
+(defun qss-tables (&optional file)
+  "Return the tables of the SQLite file FILE (default `qss-database').
 RET on one of them shows its rows."
-  (let ((file (qss-sql--file file)))
+  (let ((file (qss-sql--file (or file qss-database))))
     (qss-make-table (format "tables %s" (file-name-nondirectory file))
                     (mapcar (lambda (tab) (qss-db-table--make :file file :name (car tab)
                                                               :columns (cdr tab)))
@@ -512,6 +562,130 @@ RET on one of them shows its rows."
         (cons "Count" (lambda (r) (message "%s: %d rows" (qss-db-table-name r)
                                            (qss-count (qss-sqlite (qss-db-table-file r)
                                                                   (qss-db-table-name r))))))))
+
+;;; ------------------------------------------------------------------
+;;; Writing: the word `into'
+
+(defun qss-sql--store-value (v spec)
+  "Return V of the column SPEC as a value SQLite can store.
+Times as text in `qss-time-format', t as 1, symbols by name, other
+Lisp values (lists, records) as their printed text."
+  (cond ((null v) nil)
+        ((or (stringp v) (integerp v) (floatp v))
+         (if (and (numberp v) (eq (plist-get (cdr spec) :type) 'time))
+             (format-time-string qss-time-format v)
+           v))
+        ((qss--time-p v) (format-time-string qss-time-format v))
+        ((eq v t) 1)
+        ((symbolp v) (symbol-name v))
+        (t (qss-format-value v))))
+
+(defun qss-sql--column-types (spec values)
+  "Return (SQL-TYPE . QSS-TYPE) for the column SPEC with VALUES.
+Sizes and durations are INTEGER (bytes, nanoseconds), times TEXT;
+otherwise the values decide: INTEGER, REAL or TEXT."
+  (let* ((type (plist-get (cdr spec) :type))
+         (raw (delq nil (copy-sequence values)))
+         (type (or type (and raw (cl-every #'qss--time-p raw) 'time)))
+         ;; the values as stored: t becomes 1, a symbol text ...
+         (present (mapcar (lambda (v) (qss-sql--store-value v spec)) raw)))
+    (cons (cond ((memq type '(size duration)) "INTEGER")
+                ((eq type 'time) "TEXT")
+                ((and present (cl-every #'integerp present)) "INTEGER")
+                ((and present (cl-every #'numberp present)) "REAL")
+                (t "TEXT"))
+          type)))
+
+(defun qss-sql--stored-specs (table)
+  "Return the column specs TABLE stores: its columns and `qss-stored-fields'."
+  (let* ((specs (qss-table-columns table))
+         (row (car (qss-table-rows table)))
+         (extra (and row (cl-remove-if (lambda (f) (assq f specs)) (qss-stored-fields row)))))
+    (append specs (mapcar #'qss--column-spec extra))))
+
+(defun qss-sql-write (table file name &optional mode)
+  "Write the rows of TABLE into the table NAME of the SQLite FILE.
+FILE is created if needed.  If NAME exists, MODE decides: `replace'
+drops it first, `append' adds the rows; nil signals an error.  All in
+one transaction.  The qss types of the columns are recorded, so the
+table shows sizes and durations as such again.  Return the number of
+rows written."
+  (qss-sql--check)
+  (let* ((file (expand-file-name file))
+         (specs (qss-sql--stored-specs table))
+         (rows (qss-table-rows table))
+         (quoted (qss-sql-quote name)))
+    (unless specs (user-error "Nothing to store: the table has no columns"))
+    (make-directory (file-name-directory file) t)
+    (qss-sql--with-db db file
+      (with-sqlite-transaction db
+        (let ((exists (sqlite-select
+                       db "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE"
+                       (vector name))))
+          (when (and exists (null mode))
+            (user-error "Table %s exists in %s: add :replace or :append"
+                        name (abbreviate-file-name file)))
+          (when (and exists (eq mode 'replace))
+            (sqlite-execute db (format "DROP TABLE %s" quoted)))
+          (unless (and exists (eq mode 'append))
+            (let ((types (mapcar (lambda (spec)
+                                   (qss-sql--column-types
+                                    spec (mapcar (lambda (r) (qss-field r (car spec))) rows)))
+                                 specs)))
+              (sqlite-execute db (format "CREATE TABLE %s (%s)" quoted
+                                         (mapconcat (lambda (st)
+                                                      (format "%s %s" (qss-sql-quote (symbol-name (car (car st))))
+                                                              (cdr st)))
+                                                    (cl-mapcar #'cons specs (mapcar #'car types))
+                                                    ", ")))
+              (sqlite-execute db (format "CREATE TABLE IF NOT EXISTS %s
+                                            (\"table\" TEXT, \"column\" TEXT, \"type\" TEXT,
+                                             PRIMARY KEY (\"table\", \"column\"))"
+                                         (qss-sql-quote qss-sql--types-table)))
+              (sqlite-execute db (format "DELETE FROM %s WHERE \"table\" = ? COLLATE NOCASE"
+                                         (qss-sql-quote qss-sql--types-table))
+                              (vector name))
+              (cl-mapc (lambda (spec type)
+                         (when (cdr type)
+                           (sqlite-execute db (format "INSERT INTO %s VALUES (?, ?, ?)"
+                                                      (qss-sql-quote qss-sql--types-table))
+                                           (vector name (symbol-name (car spec))
+                                                   (symbol-name (cdr type))))))
+                       specs types)))
+          (let ((insert (format "INSERT INTO %s (%s) VALUES (%s)" quoted
+                                (mapconcat (lambda (s) (qss-sql-quote (symbol-name (car s)))) specs ", ")
+                                (mapconcat (lambda (_) "?") specs ", "))))
+            (dolist (row rows)
+              (sqlite-execute db insert
+                              (vconcat (mapcar (lambda (spec)
+                                                 (qss-sql--store-value (qss-field row (car spec)) spec))
+                                               specs))))))))
+    (remhash file qss-sql--schemas)
+    (length rows)))
+
+(defun qss-sql--into-args (args)
+  "Return (NAME FILE MODE) from the ARGS of (into sqlite NAME ...).
+Keywords: :file FILE, :replace, :append (with or without a value)."
+  (let ((name (pop args)) (file qss-database) (mode nil))
+    (unless (or (stringp name) (and name (symbolp name)))
+      (user-error "into sqlite: first the name of the table, e.g. (into sqlite \"files\")"))
+    (while args
+      (let ((key (pop args))
+            (value (if (and args (not (keywordp (car args)))) (pop args) t)))
+        (pcase key
+          (:file (setq file value))
+          (:replace (when value (setq mode 'replace)))
+          (:append (when value (setq mode 'append)))
+          (_ (user-error "into sqlite: unknown option %S (known: :file :replace :append)" key)))))
+    (list (if (symbolp name) (symbol-name name) name) file mode)))
+
+(cl-defmethod qss-into (table (_target (eql sqlite)) &rest args)
+  "Store TABLE in SQLite and return the stored table as a query.
+ARGS: NAME, then :file FILE (default `qss-database'), :replace or
+:append.  Without :replace or :append, NAME must not exist yet."
+  (pcase-let ((`(,name ,file ,mode) (qss-sql--into-args args)))
+    (qss-sql-write (qss-as-table table) file name mode)
+    (qss-sqlite file name)))
 
 ;;; ------------------------------------------------------------------
 ;;; A demo database, to try qss without a database of your own

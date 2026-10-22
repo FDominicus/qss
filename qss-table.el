@@ -102,6 +102,15 @@ FUNCTION is called with ROW."
   (ignore row)
   (list (cons "Describe" #'qss-describe)))
 
+(cl-defgeneric qss-stored-fields (row)
+  "Return the fields of ROW stored besides its columns, e.g. by `into'.
+A list of field names (symbols).  A file stores its path, so that the
+stored row can still be opened.")
+
+(cl-defmethod qss-stored-fields (_row)
+  "Store only the columns."
+  nil)
+
 (cl-defgeneric qss-describe (row)
   "Show all fields of ROW in a help buffer."
   (with-help-window (help-buffer)
@@ -135,6 +144,29 @@ FUNCTION is called with ROW."
   (if (keywordp (car row))
       (plist-get row (intern (format ":%s" name)))
     (alist-get name row)))
+
+(defvar qss-nu--dirs)                   ; qss-nu.el: row -> directory of ls
+
+(defun qss--row-path (row)
+  "Return the file the property list ROW names, or nil.
+Either its field path, if that file exists (a file row stored with
+`into'), or a :name with a :type of file, dir or symlink, as from ls in
+Nushell, in the directory ls ran in."
+  (when (and (consp row) (keywordp (car row)))
+    (let ((path (plist-get row :path))
+          (name (plist-get row :name)))
+      (cond ((and (stringp path) (file-exists-p path)) path)
+            ((and (stringp name) (member (plist-get row :type) '("file" "dir" "symlink")))
+             (expand-file-name name (or (and (boundp 'qss-nu--dirs) (gethash row qss-nu--dirs))
+                                        default-directory)))))))
+
+(cl-defmethod qss-default-action ((row cons))
+  "Open the file ROW names (see `qss--row-path').
+A directory is shown as a table; otherwise ROW is described."
+  (let ((path (qss--row-path row)))
+    (cond ((null path) (cl-call-next-method))
+          ((file-directory-p path) (qss-show (qss-files path)))
+          (t (find-file path)))))
 
 ;;; ------------------------------------------------------------------
 ;;; Columns and display
@@ -175,6 +207,11 @@ Only missing keys are added, so a spec can pass through here again."
   (cond ((null bytes) "")
         ((< bytes 1024) (format "%d" bytes))
         (t (file-size-human-readable bytes))))
+
+(defconst qss-time-format "%Y-%m-%d %H:%M:%S"
+  "How times are written as text: in SQL parameters, in SQLite, in CSV.
+The ISO 8601 form SQLite itself uses (datetime()), local time.  One
+format everywhere, so that times compare correctly as text.")
 
 (defun qss-format-time (time)
   "Return TIME (a Lisp time or seconds) as 2026-10-22 07:11."
@@ -537,6 +574,10 @@ Works with TRAMP paths too."
       ('mode (file-attribute-modes a))
       ('user (file-attribute-user-id a))
       ('group (file-attribute-group-id a)))))
+
+(cl-defmethod qss-stored-fields ((_row qss-file))
+  "A stored file keeps its path."
+  '(path))
 
 (cl-defmethod qss-default-action ((row qss-file))
   "Visit the file ROW, or show the directory ROW as a table."

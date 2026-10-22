@@ -330,18 +330,8 @@ from `qss-nu'."
           (lambda () (let ((default-directory dir))
                        (qss-nu-pipe (funcall parent-source) command)))))))
 
-;; RET on a row from `ls' and the like: open the file or directory.
-(cl-defmethod qss-default-action ((row cons))
-  "Open the file of ROW if it names one (a :name and a :type of file/dir/symlink).
-Otherwise describe ROW."
-  (let ((name (and (keywordp (car row)) (plist-get row :name)))
-        (type (and (keywordp (car row)) (plist-get row :type))))
-    (if (and (stringp name) (member type '("file" "dir" "symlink")))
-        (let ((path (expand-file-name name (gethash row qss-nu--dirs default-directory))))
-          (if (file-directory-p path)
-              (qss-show (qss-files path))
-            (find-file path)))
-      (qss-describe row))))
+;; RET on a row from `ls' and the like opens the file or directory:
+;; see `qss--row-path' in qss-table.el.
 
 (setf (alist-get 'nu qss-sources) 'qss-nu)
 (setf (alist-get 'nu qss--words) 'values)

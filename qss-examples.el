@@ -184,6 +184,18 @@
      (qss-> (files user-emacs-directory) (where (= :type "file")) (select name size modified)
             (first 3) (to csv)))
 
+    ("Storing: a pipe into SQLite, and on from there as a query"
+     ;; Without :file it goes to `qss-database'; :replace because the
+     ;; example runs again and again.
+     (let ((file (expand-file-name "qss-example-store.sqlite3" temporary-file-directory)))
+       (qss-> (sqlite (qss-demo-database) "Orders")
+              (where (is-null :status))
+              (into sqlite "open-orders" :file file :replace)
+              (sort-by amount :desc)
+              (get order-no)
+              collect)))
+     ;; => (4715 4713)
+
     ("Nushell: any command becomes a table (needs nu)"
      (qss-> (nu "ls") (where (= :type "file")) (sort-by size :desc) (first 5))
      (executable-find qss-nu-program))

@@ -20,6 +20,7 @@
 ;; Words:  where  select  reject  sort-by  first  last  get  each
 ;;         group-by  columns  count  collect (the rows as a list)
 ;;         to (the table as text: (to org), (to csv) ...)
+;;         into (store the table: (into sqlite "Name"), see qss-sql.el)
 ;;
 ;; Conditions (`where'):
 ;;   - Without `it' they are data: keywords are columns, everything else
@@ -38,7 +39,8 @@
 ;;
 ;; Column names in select, sort-by, get ... are symbols: (sort-by size :desc).
 ;;
-;; Every word returns a table again (except `count', `collect' and `to').
+;; Every word returns a table again (except `count', `collect' and `to';
+;; `into' returns the stored table, as a query).
 ;; Rows stay their objects: a filtered file still opens with RET.  A
 ;; derived table knows the way back to its source; \\`g' in its buffer
 ;; reads the source again and applies the words once more.
@@ -581,7 +583,7 @@ are written as 2026-10-22 07:11:05, a missing value is empty."
         ((stringp value) value)
         ((or (qss--time-p value)
              (and (numberp value) (eq (plist-get (cdr spec) :type) 'time)))
-         (format-time-string "%Y-%m-%d %H:%M:%S" value))
+         (format-time-string qss-time-format value))
         ((numberp value) (number-to-string value))
         (t (qss-format-value value))))
 
@@ -667,6 +669,18 @@ programs.  A query fetches all its rows here.")
                      (mapconcat #'symbol-name qss-text-formats " "))))))
 
 ;;; ------------------------------------------------------------------
+;;; Storing a table: the word `into'
+
+(cl-defgeneric qss-into (table target &rest args)
+  "Store TABLE in TARGET (a symbol) and return what was stored, as a source.
+In a pipe:  (into sqlite \"Name\")  (see qss-sql.el).  ARGS depend on
+TARGET.")
+
+(cl-defmethod qss-into (_table target &rest _args)
+  "Signal that TARGET is not known."
+  (user-error "Unknown target of into: %S (known: sqlite)" target))
+
+;;; ------------------------------------------------------------------
 ;;; qss->: chaining the words
 
 (defvar qss-sources
@@ -679,7 +693,7 @@ programs.  A query fetches all its rows here.")
     (sort-by . columns)
     (first . values) (last . values)
     (count . none) (columns . none) (collect . none)
-    (to . columns)
+    (to . columns) (into . into)
     (each . function))
   "Words of `qss->' and how their arguments are read.")
 
@@ -717,6 +731,7 @@ A word may name its function in its `qss-word-function' property."
         ('columns `(,fn ,acc ,@(mapcar (lambda (a) `',a) args)))
         ('values `(,fn ,acc ,@args))
         ('none `(,fn ,acc))
+        ('into `(,fn ,acc ',(car args) ,@(cdr args)))
         ('function `(,fn ,acc (lambda (it) (ignore it) ,(car args))))))))
 
 (defmacro qss-> (source &rest stages)

@@ -355,5 +355,94 @@ the mapping of names to keys."
   (should (eq (qss-sql--affinity "") 'none))
   (should (eq (qss-sql--affinity "BLOB") 'none)))
 
+;;; Writing: into sqlite
+
+(defmacro qss-stest--with-central (dir &rest body)
+  "Run BODY with DIR a fresh directory and `qss-database' a file in it.
+The real central database is never touched."
+  (declare (indent 1))
+  `(progn
+     (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+     (let* ((,dir (make-temp-file "qss-into-" t))
+            (qss-database (expand-file-name "central.sqlite3" ,dir)))
+       (unwind-protect (progn ,@body)
+         (delete-directory ,dir t)))))
+
+(ert-deftest qss-into-sqlite-round-trip ()
+  "Files go in with their types and path and come back as a query."
+  (qss-stest--with-central dir
+    (with-temp-file (expand-file-name "big.txt" dir) (insert (make-string 12000 ?x)))
+    (with-temp-file (expand-file-name "small.txt" dir) (insert "x"))
+    (let ((rel (qss-> (files dir) (where (like :name "%.txt")) (into sqlite "Dateien"))))
+      (should (qss-relation-p rel))
+      (should (file-exists-p qss-database))
+      (should (= 2 (qss-count rel)))
+      (should (equal (mapcar (lambda (c) (list (car c) (nth 2 c) (nth 3 c))) (qss-relation-columns rel))
+                     '((name "TEXT" nil) (type "TEXT" nil) (size "INTEGER" size)
+                       (modified "TEXT" time) (mode "TEXT" nil) (user "TEXT" nil)
+                       (path "TEXT" nil))))
+      ;; sizes are shown as sizes again, times as ISO text
+      (let ((text (qss-to rel 'text)))
+        (should (string-match-p "^big\\.txt +file +12k +[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9] [0-9:]\\{8\\} " text)))
+      ;; the words work on the stored table, in SQL
+      (let ((big (qss-> (sqlite "Dateien") (where (> :size "10kb")))))
+        (should (string-search "Parameters: (10000)" (qss-sql big)))
+        (should (equal (qss-> big (get name) collect) '("big.txt"))))
+      (should (= 2 (qss-> (sqlite "Dateien") (where (> :modified "2020-01-01")) count)))
+      ;; the path is stored, RET opens the file
+      (let ((row (car (qss-> (sqlite "Dateien") (where (= :name "small.txt")) collect))))
+        (should (equal (plist-get row :path) (expand-file-name "small.txt" dir)))
+        (save-window-excursion
+          (qss-default-action row)
+          (let ((buf (get-file-buffer (expand-file-name "small.txt" dir))))
+            (should buf)
+            (kill-buffer buf)))))))
+
+(ert-deftest qss-into-sqlite-exists-replace-append ()
+  (qss-stest--with-central dir
+    (let ((rows '((:n 1 :text "a") (:n 2 :text "b"))))
+      (qss-> rows (into sqlite "T"))
+      ;; neither :replace nor :append: refused, nothing changed
+      (should-error (qss-> rows (into sqlite "t")) :type 'user-error)
+      (should (= 2 (qss-count (qss-sqlite "T"))))
+      (should (= 4 (qss-count (qss-> rows (into sqlite "T" :append)))))
+      (should (= 1 (qss-count (qss-> '((:n 9 :text "z")) (into sqlite "T" :replace t)))))
+      (should (equal (qss-> (sqlite "T") collect) '((:n 9 :text "z"))))
+      ;; the table of qss types is not shown
+      (should (equal (qss-> (tables) (get name) collect) '("T")))
+      (should-error (qss-> rows (into sqlite "T" :update)) :type 'user-error)
+      (should-error (qss-> rows (into csv "x")) :type 'user-error))))
+
+(ert-deftest qss-into-sqlite-values ()
+  "Integers, reals, times, t, symbols and lists are stored sensibly."
+  (qss-stest--with-central dir
+    (let* ((time (encode-time '(5 11 7 22 10 2026 nil -1 nil)))
+           (file (expand-file-name "other.db" dir))
+           (rel (qss-> (list (list :i 1 :r 1.5 :when time :flag t :kind 'dir :list '(1 "a") :empty nil)
+                             (list :i 2 :r 2 :when nil :flag nil :kind nil :list nil :empty nil))
+                       (into sqlite "v" :file file))))
+      (should-not (file-exists-p qss-database))
+      (should (equal (mapcar (lambda (c) (nth 2 c)) (qss-relation-columns rel))
+                     '("INTEGER" "REAL" "TEXT" "INTEGER" "TEXT" "TEXT" "TEXT")))
+      (should (equal (car (qss-collect rel))
+                     '(:i 1 :r 1.5 :when "2026-10-22 07:11:05" :flag 1 :kind "dir"
+                          :list "(1 a)" :empty nil))))))
+
+(ert-deftest qss-into-sqlite-from-query ()
+  "A query can be stored in another file and goes on as a query there."
+  (qss-stest--with-central dir
+    (let ((temporary-file-directory dir))
+      (let ((rel (qss-> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
+                        (into sqlite "open"))))
+        (should (equal (qss-relation-table rel) "open"))
+        (should (equal (qss-> rel (sort-by amount :desc) (get order-no) collect) '(4715 4713)))))))
+
+(ert-deftest qss-sqlite-one-argument ()
+  (qss-stest--with-central dir
+    (should-error (qss-sqlite "Nothing") :type 'user-error) ; no central file yet
+    (qss-> '((:a 1)) (into sqlite "one"))
+    (should (= 1 (qss-count (qss-sqlite "one"))))
+    (should-error (qss-sqlite (expand-file-name "x.sqlite3" dir)) :type 'user-error)))
+
 (provide 'qss-sql-test)
 ;;; qss-sql-test.el ends here

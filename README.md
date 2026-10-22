@@ -111,7 +111,8 @@ Or clone the repository, put the directory on your `load-path` and
 | `(files DIR)` | files of DIR (TRAMP works) |
 | `(processes)` | running processes |
 | `(sqlite FILE TABLE)` | rows of an SQLite table, as a query |
-| `(tables FILE)` | the tables of an SQLite file; `RET` shows the rows |
+| `(sqlite TABLE)` | the same in the central file `qss-database` |
+| `(tables [FILE])` | the tables of an SQLite file (default `qss-database`); `RET` shows the rows |
 | `(nu COMMAND)` | the result of a Nushell command |
 | `(run PROGRAM ARGS...)` | the output lines of a program (column `line`), no shell |
 | any list | its elements; property lists are rows, other values have the column `value` |
@@ -178,6 +179,7 @@ else works.
 | `(each FORM)` | FORM with `it` bound to each row; results are the new rows |
 | `(nu COMMAND)` | the table through a Nushell command (see above) |
 | `(to FORMAT)` | the table as text: `text`, `org`, `md`, `csv`, `tsv` |
+| `(into sqlite NAME ...)` | store the table in SQLite; go on with it as a query (see below) |
 | `columns` | the column names |
 | `count` | the number of rows |
 | `collect` | the rows as a Lisp list |
@@ -255,6 +257,34 @@ and `>=` this holds for every column without a text type; for `=`, `/=`
 and `in` only for columns of a numeric type, so `"10kb"` in a text
 column stays text.
 
+### Storing in SQLite
+
+`into` is the way back: the table of a pipe goes into SQLite and comes
+out as a query, so the words go on there and become SQL.
+
+```
+qss> (files "~") (where (> :size "10mb")) (into sqlite "big-files")
+qss> (sqlite "big-files") (where (> :modified "2026-01-01")) (sort-by size :desc)
+qss> (nu "sys disks") (into sqlite "disks" :append)
+qss> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
+       (into sqlite "open" :file "~/work/orders.sqlite3" :replace)
+```
+
+- Without `:file` the table goes into the central file `qss-database`
+  (`~/.emacs.d/qss.sqlite3`); `(sqlite "big-files")` and `(tables)`
+  read from there.
+- If the table exists, `into` refuses unless told: `:replace` drops it
+  first, `:append` adds the rows. All in one transaction.
+- Sizes are stored as INTEGER bytes, durations as INTEGER nanoseconds,
+  times as ISO text `2026-10-22 07:11:05` (local time, the form SQLite
+  itself uses; `qss-time-format`). So `(> :size "10kb")` and
+  `(> :modified "2026-01-01")` work on the stored table too. The qss
+  types are recorded in a table `_qss_columns`, so sizes and durations
+  show as `9.8k` and `3hr` again; `tables` does not list it.
+- A file row also stores its `path`, so `RET` on the stored row opens
+  the file (or enters the directory in the REPL). Other row types can
+  name fields to store with the generic `qss-stored-fields`.
+
 Column and table names become keys mechanically: `OrderDate` →
 `order-date`, `HT_Orders` → `ht-orders`, `Straße` → `strasse`.
 Display fetches at most `qss-sql-display-limit` rows (1000).
@@ -289,6 +319,7 @@ A row type is a few methods:
 (cl-defmethod qss-field ((x my-thing) name) ...)
 (cl-defmethod qss-default-action ((x my-thing)) ...)   ; RET
 (cl-defmethod qss-actions ((x my-thing)) (list (cons "Do it" #'my-do-it)))  ; a
+(cl-defmethod qss-stored-fields ((x my-thing)) '(id))                         ; into
 ```
 
 Column types are `number`, `size` (bytes), `duration` (nanoseconds) and

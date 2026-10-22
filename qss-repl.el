@@ -384,13 +384,12 @@ On output text, move to the end of the input."
 
 (defun qss-repl--row-directory (row)
   "Return the directory ROW stands for, or nil.
-A directory row from `files', or a row with :type \"dir\" from Nushell."
-  (cond ((and (qss-file-p row) (qss-field row 'dir-p)) (qss-file-path row))
-        ((and (consp row) (keywordp (car row))
-              (equal (plist-get row :type) "dir") (stringp (plist-get row :name)))
-         (expand-file-name (plist-get row :name)
-                           (or (and (boundp 'qss-nu--dirs) (gethash row qss-nu--dirs))
-                               default-directory)))))
+A directory row from `files', a stored row whose path is a directory,
+or a row with :type \"dir\" from Nushell."
+  (if (qss-file-p row)
+      (and (qss-field row 'dir-p) (qss-file-path row))
+    (let ((path (qss--row-path row)))
+      (and path (file-directory-p path) path))))
 
 (defun qss-repl--row-action (row)
   "Run RET on ROW in the REPL: enter a directory in place, otherwise as usual."
