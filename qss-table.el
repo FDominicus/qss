@@ -22,7 +22,9 @@
 ;; In a table buffer:
 ;;   RET   default action of the object (open a file, enter a directory,
 ;;         show a process)
-;;   a     menu of the actions for this object
+;;   a     the actions of the row, words with the value at point,
+;;         copying the table (also on the right mouse button)
+;;   w     copy the table as text (`qss-copy-format')
 ;;   g     read the source again
 ;;   S     sort by the column at point (vtable)
 ;;   q     quit the window
@@ -247,6 +249,9 @@ Numbers stay numbers, times become seconds, the rest is text."
 
 (defvar-local qss--table nil "The table this buffer shows.")
 
+(defvar-local qss--whole nil
+  "The query this buffer shows a part of, or nil if it shows a whole table.")
+
 (defvar-local qss--vtable-buffer nil
   "Non-nil in buffers where qss inserts vtables (for the header fix).")
 
@@ -339,22 +344,58 @@ every text in full (command lines with tens of thousands of characters)."
                                  (_ #'identity)))))
           (qss-table-columns table)))
 
-(defun qss-insert-vtable (table &optional keymap)
+;; The commands on a row are in qss-menu.el, which needs the words.
+(autoload 'qss-action-at-point "qss-menu" nil t)
+(autoload 'qss-context-menu "qss-menu" nil t)
+(autoload 'qss-copy-table "qss-menu" nil t)
+
+(defvar-local qss--whole-tables nil
+  "Weak hash table: vtable -> the whole table or query it shows.
+A vtable in the REPL shows only the first rows; the actions of the
+menu and \\`w' work on the whole.")
+
+(defun qss-table-at-point ()
+  "Return the whole table or query of the vtable at point, or nil."
+  (let ((vt (vtable-current-table)))
+    (and vt qss--whole-tables (gethash vt qss--whole-tables))))
+
+(defun qss--row-keymap (keymap)
+  "Return the keymap of table rows: KEYMAP, if given, over the qss keys."
+  (let ((map (define-keymap
+               "a" #'qss-action-at-point
+               "w" #'qss-copy-table
+               ;; The menu opens when the button is released: on a terminal
+               ;; the release would otherwise choose the item under the
+               ;; mouse.  Pressing does nothing, also with `context-menu-mode'.
+               "<down-mouse-3>" #'ignore
+               "<mouse-3>" #'qss-context-menu)))
+    (if keymap
+        (make-composed-keymap (list keymap) map)
+      map)))
+
+(defun qss-insert-vtable (table &optional keymap whole)
   "Insert the rows of TABLE at point as a vtable.
-RET runs the default action of a row, \`a' offers its actions.
-KEYMAP, if given, is merged into the keymap of the table rows."
+RET runs the default action of a row; \\`a' and the right mouse button
+offer the actions of the row, of the value at point and of the table;
+\\`w' copies the table as text.  KEYMAP, if given, is merged into the
+keymap of the table rows.  WHOLE is the table or query TABLE is a part
+of (default TABLE itself); the actions work on it."
   (setq qss--vtable-buffer t)
   (if (null (qss-table-rows table))
       (insert "(no rows)\n")
-    (make-vtable
-     :objects (qss-table-rows table)
-     :columns (qss--vtable-columns table)
-     ;; Header in the buffer, not in the header line: on a terminal the
-     ;; vtable header line is misaligned (Emacs 29.3).
-     :use-header-line nil
-     :face 'qss-table
-     :keymap keymap
-     :actions '("RET" qss--default "a" qss--actions-menu))))
+    (let ((vt (make-vtable
+               :objects (qss-table-rows table)
+               :columns (qss--vtable-columns table)
+               ;; Header in the buffer, not in the header line: on a
+               ;; terminal the vtable header line is misaligned (Emacs 29.3).
+               :use-header-line nil
+               :face 'qss-table
+               :keymap (qss--row-keymap keymap)
+               :actions '("RET" qss--default))))
+      (unless qss--whole-tables
+        (setq qss--whole-tables (make-hash-table :test #'eq :weakness 'key)))
+      (puthash vt (or whole table) qss--whole-tables)
+      vt)))
 
 (defun qss--insert-table (table)
   "Insert TABLE into the current buffer."
@@ -364,14 +405,17 @@ KEYMAP, if given, is merged into the keymap of the table rows."
             (format "  (%d)\n\n" (length (qss-table-rows table))))
     ;; g on a row: read again, not only redraw (vtable binds g to
     ;; `vtable-revert-command' otherwise).
-    (qss-insert-vtable table (define-keymap "g" #'qss-refresh))))
+    (qss-insert-vtable table (define-keymap "g" #'qss-refresh) qss--whole)))
 
-(defun qss-show (table)
-  "Show TABLE in a buffer of its own and return the buffer."
+(defun qss-show (table &optional whole)
+  "Show TABLE in a buffer of its own and return the buffer.
+WHOLE is the query TABLE shows the first rows of, if any; the actions
+of the menu continue the query, not the rows."
   (let ((buf (get-buffer-create (format "*qss %s*" (qss-table-title table)))))
     (with-current-buffer buf
       (qss-table-mode)
-      (setq qss--table table)
+      (setq qss--table table
+            qss--whole whole)
       (qss--insert-table table)
       (goto-char (point-min))
       (forward-line 2))
@@ -401,12 +445,6 @@ directories in place.")
 (defun qss--default (row)
   "Run the default action of ROW (see `qss-row-action-function')."
   (funcall (or qss-row-action-function #'qss-default-action) row))
-
-(defun qss--actions-menu (row)
-  "Choose one of the actions of ROW and run it."
-  (let* ((actions (qss-actions row))
-         (choice (completing-read "Action: " (mapcar #'car actions) nil t)))
-    (funcall (cdr (assoc choice actions)) row)))
 
 ;;; ------------------------------------------------------------------
 ;;; Source: processes
@@ -523,7 +561,7 @@ Works with TRAMP paths too."
       (if (qss-field row 'dir-p)
           (delete-directory path t)
         (delete-file path))
-      (qss-refresh))))
+      (if qss--table (qss-refresh) (message "Deleted %s" path)))))
 
 ;;; ------------------------------------------------------------------
 ;;; Source: programs

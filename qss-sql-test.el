@@ -315,5 +315,45 @@ the mapping of names to keys."
                            (:order-no 4715 :amount 999.99) (:order-no 4716 :amount 150.0)))))
       (delete-directory temporary-file-directory t))))
 
+;;; Sizes and durations as text
+
+(ert-deftest qss-sql-quantities ()
+  "\"10kb\" means 10000 bytes in SQL as in memory, but not in a text column."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let ((file (make-temp-file "qss-sql-q-" nil ".sqlite3")))
+    (unwind-protect
+        (progn
+          (qss-sql--with-db db file
+            (sqlite-execute db "CREATE TABLE \"Files\" (\"Name\" TEXT, \"Size\" INTEGER,
+               \"Took\" INTEGER, \"Note\" TEXT, \"Raw\")")
+            (dolist (row '(("a" 500 2000000000 "10kb" 20000)
+                           ("b" 20000 7200000000000 "x" 5)
+                           ("c" nil nil nil nil)))
+              (sqlite-execute db "INSERT INTO \"Files\" VALUES (?,?,?,?,?)" (vconcat row))))
+          (cl-flet ((names (rel) (mapcar (lambda (r) (plist-get r :name)) (qss-collect rel))))
+            (let ((rel (qss-> (sqlite file "Files") (where (> :size "10kb")))))
+              (should (string-search "Parameters: (10000)" (qss-sql rel)))
+              (should (equal (names rel) '("b"))))
+            (should (equal (names (qss-> (sqlite file "Files") (where (< :took "1hr")))) '("a")))
+            ;; text column: "10kb" stays text
+            (should (equal (names (qss-> (sqlite file "Files") (where (= :note "10kb")))) '("a")))
+            ;; a column without type: ordered comparisons convert
+            (should (equal (names (qss-> (sqlite file "Files") (where (> :raw "10kb")))) '("a")))
+            (should (equal (names (qss-> (sqlite file "Files") (where (in :size '("500b" "20kb")))))
+                           '("a" "b")))
+            ;; the same rows as in memory
+            (should (equal (names (qss-> (sqlite file "Files") (where (>= :size "0.5kb"))))
+                           (names (qss-> (qss-as-table (qss-sqlite file "Files"))
+                                         (where (>= :size "0.5kb"))))))))
+      (delete-file file))))
+
+(ert-deftest qss-sql-affinity ()
+  (should (eq (qss-sql--affinity "INTEGER") 'numeric))
+  (should (eq (qss-sql--affinity "decimal(10,2)") 'numeric))
+  (should (eq (qss-sql--affinity "DECIMAL_TEXT") 'text))
+  (should (eq (qss-sql--affinity "VARCHAR(20)") 'text))
+  (should (eq (qss-sql--affinity "") 'none))
+  (should (eq (qss-sql--affinity "BLOB") 'none)))
+
 (provide 'qss-sql-test)
 ;;; qss-sql-test.el ends here

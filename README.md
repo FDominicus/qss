@@ -16,8 +16,8 @@ qss> (select name size)
 ```
 
 `M-x qss` opens a REPL: type a pipe, the table appears right below.
-The rows stay what they are: `RET` on a row opens the file, `a` offers
-its actions.
+The rows stay what they are: `RET` on a row opens the file, `a` (or
+the right mouse button) offers its actions.
 
 A line that starts with a word, like `(select name size)` above, or
 with `|`, continues the last table; a line that starts with a source,
@@ -32,15 +32,36 @@ qss> | (sort-by size :desc)
 | Key | In the REPL |
 |---|---|
 | `RET` | on the input line: run it; on a table row: open the row |
-| `a` | on a table row: the actions of the row |
+| `a`, right mouse button | on a table row: the actions of the row, words with the value at point, copying the table |
+| `w` | on a table row: copy the whole table as text (`C-u w` asks for the format) |
 | `S` | on a table row: sort by the column at point |
 | `M-p` / `M-n` | previous / next input |
 | `TAB` | complete words, sources, column names and file names |
 | `C-c M-o` | clear the buffer |
 | `[buffer]` | show the table in a buffer of its own |
 
-In a table buffer `RET`, `a` and `S` work the same, and `g` reads the
-source again.
+In a table buffer `RET`, `a`, `w` and `S` work the same, and `g` reads
+the source again.
+
+### Actions at point
+
+`a` or the right mouse button on a cell offers, in three groups:
+
+- the actions of the row object: open the file, Dired, kill the process …
+- words with the value under point: `(where (= :status "paid"))`,
+  `(where (/= ...))`, `(where (> :amount 120.0))` for numbers,
+  `(where (is-null :city))` for an empty cell, for a time the day:
+  `(where (and (>= :modified "2026-10-22") (< :modified "2026-10-23")))`;
+  then `(sort-by COL)`, `(sort-by COL :desc)`, `(group-by COL)`,
+  `(select COL)`, `(reject COL)` and copying the value;
+- copying the whole table as text, Org, Markdown, CSV or TSV.
+
+A word continues the *whole* table, not only the rows the REPL shows,
+and on SQLite it continues the query, so the condition becomes SQL. In
+the REPL the word is submitted as the next input — visible and in the
+history — and continues the table that was clicked, even an older one;
+what you had typed at the prompt stays there. In a table buffer the
+result opens in a buffer of its own.
 
 `M-x qss-eval` does the same from the minibuffer, with the result in a
 table buffer.
@@ -156,12 +177,27 @@ else works.
 | `(group-by COL)` | one row per value with a count; `RET` shows the group |
 | `(each FORM)` | FORM with `it` bound to each row; results are the new rows |
 | `(nu COMMAND)` | the table through a Nushell command (see above) |
+| `(to FORMAT)` | the table as text: `text`, `org`, `md`, `csv`, `tsv` |
 | `columns` | the column names |
 | `count` | the number of rows |
 | `collect` | the rows as a Lisp list |
 | `sql` | the SQL of a query (SQLite only) |
 
 `collect` after `get` returns the plain values.
+
+`(to text)`, `(to org)` and `(to md)` are aligned and show the cells as
+the table does (`9.8k`, `2026-10-22 14:40`); `(to csv)` and `(to tsv)`
+carry the plain values for other programs: sizes in bytes, durations in
+nanoseconds, times with seconds. `w` on a table uses the same, in the
+format of `qss-copy-format`.
+
+```
+qss> (sqlite (qss-demo-database) "Customers") (select name city) (to org)
+| name        | city     |
+|-------------+----------|
+| Anna Meier  | Bruchsal |
+...
+```
 
 ### Conditions
 
@@ -212,6 +248,12 @@ ORDER BY "OrderDate" IS NULL, "OrderDate" DESC
 LIMIT ?
 Parameters: (100 20)
 ```
+
+Sizes and durations written as in Nushell work in SQL too:
+`(where (> :size "10kb"))` sends the parameter 10000. For `<`, `>`, `<=`
+and `>=` this holds for every column without a text type; for `=`, `/=`
+and `in` only for columns of a numeric type, so `"10kb"` in a text
+column stays text.
 
 Column and table names become keys mechanically: `OrderDate` →
 `order-date`, `HT_Orders` → `ht-orders`, `Straße` → `strasse`.

@@ -15,11 +15,19 @@
 (require 'qss-examples)
 
 (defmacro qss-etest--with-fresh-db (&rest body)
-  "Run BODY with a demo database created anew in a temporary directory."
+  "Run BODY with a demo database created anew in a temporary directory.
+`user-emacs-directory', which the file examples read, is a directory
+with a few files there, so the tests do not depend on ~/.emacs.d."
   (declare (indent 0))
   `(progn
      (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
-     (let ((temporary-file-directory (make-temp-file "qss-examples-" t)))
+     (let* ((temporary-file-directory (make-temp-file "qss-examples-" t))
+            (user-emacs-directory (file-name-as-directory
+                                   (expand-file-name "emacs.d" temporary-file-directory))))
+       (make-directory user-emacs-directory)
+       (dolist (f '(("init.el" . 6000) ("early-init.el" . 100) ("notes.txt" . 10)))
+         (with-temp-file (expand-file-name (car f) user-emacs-directory)
+           (insert (make-string (cdr f) ?x))))
        (unwind-protect (progn ,@body)
          (delete-directory temporary-file-directory t)))))
 
@@ -61,7 +69,11 @@
                    '(("paid" 3) (nil 2) ("cancelled" 1))))
     (should (= 245.5 (qss-etest--value "Using the rows in Lisp: the total of the paid orders")))
     (should (equal (car (qss-collect (qss-etest--value "Joining by hand: orders with the customer's name")))
-                   '(:order-no 4711 :name "Anna Meier" :amount 120.0)))))
+                   '(:order-no 4711 :name "Anna Meier" :amount 120.0)))
+    (should (string-prefix-p "| name        | city     | since      |\n|-------------+----------+------------|\n| Anna Meier  | Bruchsal | 2019-03-01 |\n"
+                             (qss-etest--value "Text: a table as Org, to paste into a note (w in a table does the same)")))
+    (should (string-match-p "\\`name,size,modified\n\\(.*,[0-9]+,[0-9-]+ [0-9:]+\n\\)\\{3\\}\\'"
+                            (qss-etest--value "Text: CSV with the plain values, for other programs")))))
 
 (ert-deftest qss-examples-buffer ()
   "M-x qss-examples shows every example and its result."

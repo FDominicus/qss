@@ -38,8 +38,11 @@
 ;;   - The last table is also in the variable `qss-last', for Lisp.
 ;;
 ;; In a table: RET runs the default action of the row (open the file,
-;; enter a directory: cd plus its files), `a' offers its actions, `S'
-;; sorts by the column at point.
+;; enter a directory: cd plus its files).  `a' or the right mouse
+;; button offers the actions of the row and words with the value at
+;; point, e.g. (where (= :status "paid")) or (sort-by size :desc); the
+;; word is submitted as the next input.  `w' copies the table as text,
+;; `S' sorts by the column at point.
 ;; Long tables show the first `qss-repl-max-rows' rows and a [show all]
 ;; button.  [buffer] opens the table in a buffer of its own, where `g'
 ;; reads it again.
@@ -54,6 +57,7 @@
 (require 'cl-lib)
 (require 'pp)
 (require 'qss-sql)
+(require 'qss-menu)
 
 (defcustom qss-repl-max-rows 30
   "Maximum number of rows a table shows inside the qss REPL."
@@ -103,7 +107,8 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
    ";;   !git log --oneline -5       runs a program, no shell\n"
    ";;   cd ~/src                    changes the directory\n"
    ";; A line starting with | or a word, e.g. (where ...), continues the last table.\n"
-   ";; RET/a/S on a table row; M-p/M-n history; TAB completes; M-x qss-examples.\n"))
+   ";; RET/a/w/S or the right mouse button on a table row; M-p/M-n history;\n"
+   ";; TAB completes; M-x qss-examples.\n"))
 
 ;;; ------------------------------------------------------------------
 ;;; Mode
@@ -128,6 +133,7 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
   (setq-local truncate-lines t)
   (setq-local qss--vtable-buffer t)
   (setq-local qss-row-action-function #'qss-repl--row-action)
+  (setq-local qss-continue-function #'qss-repl--continue)
   (setq qss-repl--input-start (make-marker))
   (add-hook 'completion-at-point-functions #'qss-repl-completion-at-point nil t))
 
@@ -196,7 +202,7 @@ number of all rows."
     (insert (format "%d row%s  " total (if (= total 1) "" "s")))
     (qss-repl--button "[buffer]" (lambda () (qss-display whole)))
     (insert "  " (propertize (qss-table-title shown) 'face 'qss-repl-title) "\n")
-    (qss-insert-vtable shown)
+    (qss-insert-vtable shown nil whole)
     ;; vtable leaves point after its header line, not after the table
     (goto-char (point-max))
     (when (> total (length (qss-table-rows shown)))
@@ -208,7 +214,7 @@ number of all rows."
   "Insert VALUE as the result of an input."
   (cond ((or (qss-table-p value) (qss-relation-p value))
          (qss-repl--insert-table value))
-        ((stringp value) (insert value "\n"))
+        ((stringp value) (insert value (if (string-suffix-p "\n" value) "" "\n")))
         (t (let ((print-length 50) (print-level 6))
              (insert (pp-to-string value))))))
 
@@ -393,6 +399,16 @@ A directory row from `files', or a row with :type \"dir\" from Nushell."
         (progn (qss-repl-submit (concat "cd " (abbreviate-file-name dir)))
                (qss-repl-submit "(files)"))
       (qss-default-action row))))
+
+;; The actions at point (qss-menu.el) continue a table here as input.
+(defun qss-repl--continue (table stage)
+  "Continue TABLE with STAGE as input, as if typed; keep what is typed so far.
+TABLE becomes the last table first, so the word continues the table
+whose row was clicked, even if it is not the newest one."
+  (let ((pending (buffer-substring-no-properties qss-repl--input-start (point-max))))
+    (setq qss-last table)
+    (qss-repl-submit (prin1-to-string stage))
+    (insert pending)))
 
 ;;; ------------------------------------------------------------------
 ;;; History, clearing, completion

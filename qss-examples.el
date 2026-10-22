@@ -175,6 +175,15 @@
                           :name (cdr (assq (plist-get it :customer-no) names))
                           :amount (plist-get it :amount))))))
 
+    ("Text: a table as Org, to paste into a note (w in a table does the same)"
+     ;; => | name        | city     | ...
+     (qss-> (sqlite (qss-demo-database) "Customers") (select name city since) (to org)))
+
+    ("Text: CSV with the plain values, for other programs"
+     ;; sizes in bytes, times with seconds
+     (qss-> (files user-emacs-directory) (where (= :type "file")) (select name size modified)
+            (first 3) (to csv)))
+
     ("Nushell: any command becomes a table (needs nu)"
      (qss-> (nu "ls") (where (= :type "file")) (sort-by size :desc) (first 5))
      (executable-find qss-nu-program))

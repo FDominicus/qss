@@ -19,6 +19,7 @@
 ;;
 ;; Words:  where  select  reject  sort-by  first  last  get  each
 ;;         group-by  columns  count  collect (the rows as a list)
+;;         to (the table as text: (to org), (to csv) ...)
 ;;
 ;; Conditions (`where'):
 ;;   - Without `it' they are data: keywords are columns, everything else
@@ -37,7 +38,7 @@
 ;;
 ;; Column names in select, sort-by, get ... are symbols: (sort-by size :desc).
 ;;
-;; Every word returns a table again (except `count' and `collect').
+;; Every word returns a table again (except `count', `collect' and `to').
 ;; Rows stay their objects: a filtered file still opens with RET.  A
 ;; derived table knows the way back to its source; \\`g' in its buffer
 ;; reads the source again and applies the words once more.
@@ -567,6 +568,105 @@ One row per value with the count; RET on a group shows its rows.")
                  (lambda (tab) (qss-group-by tab col)))))
 
 ;;; ------------------------------------------------------------------
+;;; Tables as text: the word `to'
+
+(defconst qss-text-formats '(text org md csv tsv)
+  "Formats of the word `to' (`qss-to').")
+
+(defun qss--plain-value (value spec)
+  "Return VALUE of the column SPEC as plain text, for CSV and TSV.
+Numbers stay exact (sizes in bytes, durations in nanoseconds), times
+are written as 2026-10-22 07:11:05, a missing value is empty."
+  (cond ((null value) "")
+        ((stringp value) value)
+        ((or (qss--time-p value)
+             (and (numberp value) (eq (plist-get (cdr spec) :type) 'time)))
+         (format-time-string "%Y-%m-%d %H:%M:%S" value))
+        ((numberp value) (number-to-string value))
+        (t (qss-format-value value))))
+
+(defun qss--one-line (text)
+  "Return TEXT with line breaks and tabs as spaces."
+  (replace-regexp-in-string "[\n\r\t]" " " text))
+
+(defun qss--text-cells (table plain)
+  "Return the header and the rows of TABLE as lists of strings.
+With PLAIN, the cells are plain values (`qss--plain-value'), otherwise
+the text the table shows."
+  (let ((specs (qss-table-columns table)))
+    (cons (mapcar (lambda (spec) (symbol-name (car spec))) specs)
+          (mapcar (lambda (row)
+                    (mapcar (lambda (spec)
+                              (if plain
+                                  (qss--plain-value (qss-field row (car spec)) spec)
+                                (qss--display-value row spec)))
+                            specs))
+                  (qss-table-rows table)))))
+
+(defun qss--pad (text width right)
+  "Return TEXT padded with spaces to WIDTH columns, on the left if RIGHT."
+  (let ((fill (make-string (max 0 (- width (string-width text))) ?\s)))
+    (if right (concat fill text) (concat text fill))))
+
+(defun qss--aligned-text (table format)
+  "Return TABLE as aligned text; FORMAT is `text', `org' or `md'."
+  (let* ((escape (pcase format
+                   ('org (lambda (s) (string-replace "|" "\\vert{}" s)))
+                   ('md (lambda (s) (string-replace "|" "\\|" s)))
+                   (_ #'identity)))
+         (cells (mapcar (lambda (line)
+                          (mapcar (lambda (s) (funcall escape (qss--one-line s))) line))
+                        (qss--text-cells table nil)))
+         (rights (mapcar (lambda (spec) (eq (plist-get (cdr spec) :align) 'right))
+                         (qss-table-columns table)))
+         (widths (apply #'cl-mapcar
+                        (lambda (&rest column) (apply #'max 1 (mapcar #'string-width column)))
+                        cells))
+         (line (lambda (strings)
+                 (let ((padded (cl-mapcar #'qss--pad strings widths rights)))
+                   (if (eq format 'text)
+                       (string-trim-right (mapconcat #'identity padded "  "))
+                     (concat "| " (mapconcat #'identity padded " | ") " |")))))
+         (rule (pcase format
+                 ('org (concat "|-" (mapconcat (lambda (w) (make-string w ?-)) widths "-+-") "-|"))
+                 ('md (concat "|" (mapconcat
+                                   #'identity
+                                   (cl-mapcar (lambda (w right)
+                                                (concat (make-string (1+ w) ?-) (if right ":" "-")))
+                                              widths rights)
+                                   "|")
+                              "|")))))
+    (concat (funcall line (car cells)) "\n"
+            (if rule (concat rule "\n") "")
+            (mapconcat (lambda (row) (concat (funcall line row) "\n")) (cdr cells) ""))))
+
+(defun qss--csv-field (text)
+  "Return TEXT as a CSV field, quoted if needed."
+  (if (string-match-p "[\",\n\r]\\|\\`[ \t]\\|[ \t]\\'" text)
+      (concat "\"" (string-replace "\"" "\"\"" text) "\"")
+    text))
+
+(cl-defgeneric qss-to (table format)
+  "Return TABLE as text in FORMAT, one of `qss-text-formats'.
+text, org and md are aligned and show the cells as the table does
+\(10k, 2026-10-22 07:11); csv and tsv carry the plain values (sizes in
+bytes, durations in nanoseconds, times with seconds), for other
+programs.  A query fetches all its rows here.")
+
+(cl-defmethod qss-to (table format)
+  "Return TABLE, in memory, as text in FORMAT."
+  (let ((table (qss-as-table table))
+        (format (if (stringp format) (intern format) format)))
+    (pcase format
+      ((or 'text 'org 'md) (qss--aligned-text table format))
+      ('csv (mapconcat (lambda (line) (concat (mapconcat #'qss--csv-field line ",") "\n"))
+                       (qss--text-cells table t) ""))
+      ('tsv (mapconcat (lambda (line) (concat (mapconcat #'qss--one-line line "\t") "\n"))
+                       (qss--text-cells table t) ""))
+      (_ (user-error "Format %S: use one of %s" format
+                     (mapconcat #'symbol-name qss-text-formats " "))))))
+
+;;; ------------------------------------------------------------------
 ;;; qss->: chaining the words
 
 (defvar qss-sources
@@ -579,6 +679,7 @@ One row per value with the count; RET on a group shows its rows.")
     (sort-by . columns)
     (first . values) (last . values)
     (count . none) (columns . none) (collect . none)
+    (to . columns)
     (each . function))
   "Words of `qss->' and how their arguments are read.")
 

@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.6.0
+;; Version: 0.7.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -35,7 +35,9 @@
 ;; with; M-x qss-examples shows many more examples.
 ;;
 ;; Rows stay the objects they are: in the table buffer RET opens a
-;; file, `a' offers the actions of the row, `g' reads the source again.
+;; file, `a' (or the right mouse button) offers the actions of the row
+;; and words with the value at point, `w' copies the table as text, `g'
+;; reads the source again.
 ;; On SQLite the words become SQL with `?' parameters until the rows
 ;; are needed.
 ;;
@@ -54,6 +56,7 @@
 ;;   qss-nu.el        Nushell as a source: (nu "ps | where cpu > 5"),
 ;;                    and as a word: (files) (nu "where size > 10kb")
 ;;   qss-nuon.el      reads and writes NUON, Nushell's format with types
+;;   qss-menu.el      actions at point: a, the right mouse button, w
 ;;   qss-repl.el      M-x qss, the REPL
 ;;   qss-examples.el  M-x qss-examples
 
@@ -62,6 +65,7 @@
 (require 'qss-table)
 (require 'qss-pipe)
 (require 'qss-sql)
+(require 'qss-menu)
 (require 'qss-repl)
 (require 'qss-nu)
 

@@ -228,13 +228,57 @@ The slots to set are in CHANGES, a property list of slot keywords and values."
         ((and (symbolp v) v) (symbol-name v))
         (t v)))
 
+(defun qss-sql--affinity (type)
+  "Return the SQLite affinity of the declared column TYPE.
+`numeric' (INTEGER, REAL, NUMERIC ...), `text' or `none' (BLOB or no
+type), by the rules of SQLite."
+  (let ((ty (upcase type)))
+    (cond ((string-match-p "INT" ty) 'numeric)
+          ((string-match-p "CHAR\\|CLOB\\|TEXT" ty) 'text)
+          ((or (string-empty-p ty) (string-match-p "BLOB" ty)) 'none)
+          (t 'numeric))))
+
+(defun qss-sql--quantities-p (rel op operands)
+  "Return non-nil if sizes and durations as text become numbers for OP.
+OPERANDS are those of the comparison in the template.  For < > <= >=
+on any column without text type; for = /= and `in' only on a column of
+numeric type.  So (> :size \"10kb\") means 10000 bytes, as in memory,
+and \"10kb\" in a text column stays text."
+  (let* ((col (cl-find-if #'keywordp operands))
+         (type (and col (nth 2 (assq (qss--name col) (qss-relation-columns rel)))))
+         (affinity (and type (qss-sql--affinity type))))
+    (and affinity
+         (if (memq op '(< > <= >=))
+             (not (eq affinity 'text))
+           (eq affinity 'numeric)))))
+
+(defun qss-sql--quantity (v)
+  "Return V, or its number if V is a size or duration as text (\"10kb\")."
+  (let ((q (and (stringp v) (qss-parse-quantity v))))
+    (if q (cdr q) v)))
+
 (defun qss-sql--condition (rel template values)
   "Return (SQL . PARAMS) for TEMPLATE with VALUES (from a `qss-condition').
-Column names are looked up in REL."
-  (let ((params (list nil)))              ; head, so that nconc appends
+Column names are looked up in REL.  Sizes and durations as text become
+numbers where `qss-sql--quantities-p' says so."
+  (let ((params (list nil))               ; head, so that nconc appends
+        (quantities nil))                 ; inside a comparison that converts
     (cl-labels
-        ((value-of (form) (nth (cadr form) values))
+        ((value-of (form)
+           (let ((v (nth (cadr form) values)))
+             (cond ((not quantities) v)
+                   ((consp v) (mapcar #'qss-sql--quantity v)) ; the list of `in'
+                   (t (qss-sql--quantity v)))))
+         (compare (f)
+           (let ((outer quantities))
+             (setq quantities (qss-sql--quantities-p rel (car f) (cdr f)))
+             (unwind-protect (render-1 f)
+               (setq quantities outer))))
          (render (f)
+           (if (memq (car-safe f) '(= /= < > <= >= in))
+               (compare f)
+             (render-1 f)))
+         (render-1 (f)
            (cond
             ((keywordp f) (qss-sql--column rel (qss--name f)))
             ((eq (car-safe f) 'qss-param) (qss-sql--param (value-of f) params))
@@ -353,7 +397,7 @@ A column is a number column if all its values are numbers."
     (setf (qss-table-source table)
           (lambda () (qss-sql--table rel (qss-sql--run rel qss-sql-display-limit)
                                      (qss-table-title table))))
-    (qss-show table)))
+    (qss-show table rel)))
 
 (cl-defmethod qss-where ((rel qss-relation) cond)
   "Add COND to the query REL as SQL, or filter in memory if it cannot be SQL."

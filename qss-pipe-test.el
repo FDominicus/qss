@@ -279,5 +279,40 @@
               (should (string-match-p "20k" (buffer-string)))))
         (kill-buffer (format "*qss %s*" (qss-table-title tab)))))))
 
+;;; Tables as text
+
+(ert-deftest qss-to-formats ()
+  "text, org and md show the cells as the table does; csv and tsv the plain values."
+  (let ((tab (qss-make-table "t" (list (list :name "Ada, L." :size 2048 :note "a|b")
+                                       (list :name "Grace" :size 10 :note nil))
+                             '(name (size :type size) note))))
+    (should (equal (qss-to tab 'text)
+                   "name     size  note\nAda, L.    2k  a|b\nGrace      10\n"))
+    (should (equal (qss-to tab 'org)
+                   (concat "| name    | size | note      |\n"
+                           "|---------+------+-----------|\n"
+                           "| Ada, L. |   2k | a\\vert{}b |\n"
+                           "| Grace   |   10 |           |\n")))
+    (should (equal (qss-to tab 'md)
+                   (concat "| name    | size | note |\n"
+                           "|---------|-----:|------|\n"
+                           "| Ada, L. |   2k | a\\|b |\n"
+                           "| Grace   |   10 |      |\n")))
+    (should (equal (qss-to tab 'csv) "name,size,note\n\"Ada, L.\",2048,a|b\nGrace,10,\n"))
+    (should (equal (qss-to tab "tsv") "name\tsize\tnote\nAda, L.\t2048\ta|b\nGrace\t10\t\n"))
+    (should-error (qss-to tab 'xml) :type 'user-error)))
+
+(ert-deftest qss-to-csv-quoting-and-times ()
+  (let* ((time (encode-time '(5 11 7 22 10 2026 nil -1 nil)))
+         (tab (qss-make-table "t" (list (list :text "say \"hi\"\nnow" :when time))
+                              '(text (when :type time)))))
+    (should (equal (qss-to tab 'csv) "text,when\n\"say \"\"hi\"\"\nnow\",2026-10-22 07:11:05\n"))
+    (should (equal (qss-to tab 'text) "text          when\nsay \"hi\" now  2026-10-22 07:11\n"))))
+
+(ert-deftest qss-to-as-word ()
+  (qss-ptest--with-dir dir
+    (let ((csv (qss-> (files dir) (where (= :name "b.el")) (select name size) (to csv))))
+      (should (string-match-p "\\`name,size\nb\\.el,[0-9]+\n\\'" csv)))))
+
 (provide 'qss-pipe-test)
 ;;; qss-pipe-test.el ends here
