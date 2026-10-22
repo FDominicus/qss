@@ -110,6 +110,15 @@ FUNCTION is called with ROW."
       (insert "\n")
       (pp row (current-buffer)))))
 
+;; Anything else, e.g. numbers or strings: one column `value'.
+(cl-defmethod qss-columns (_row)
+  "Return the one column of a plain value."
+  '(value))
+
+(cl-defmethod qss-field (row _name)
+  "Return ROW itself: a plain value has only itself as field."
+  row)
+
 ;; Property lists with keywords, e.g. rows from SQL:
 ;; (:pid 1 :name "init") -> columns pid name
 (cl-defmethod qss-columns ((row cons))
@@ -129,19 +138,21 @@ FUNCTION is called with ROW."
 ;;; Columns and display
 
 (defun qss--column-spec (spec)
-  "Return SPEC as (NAME . PLIST), with defaults depending on :type."
+  "Return SPEC as (NAME . PLIST), with defaults depending on :type.
+Only missing keys are added, so a spec can pass through here again."
   (let* ((spec (if (consp spec) spec (list spec)))
-         (plist (cdr spec))
+         (plist (copy-sequence (cdr spec)))
          (type (plist-get plist :type)))
-    (cons (car spec)
-          (append plist
-                  (list :align (or (plist-get plist :align)
-                                   (if (memq type '(number size)) 'right 'left))
-                        :format (or (plist-get plist :format)
-                                    (pcase type
-                                      ('size #'qss-format-size)
-                                      ('time #'qss-format-time)
-                                      (_ #'qss-format-value))))))))
+    (unless (plist-member plist :align)
+      (setq plist (plist-put plist :align
+                             (if (memq type '(number size)) 'right 'left))))
+    (unless (plist-member plist :format)
+      (setq plist (plist-put plist :format
+                             (pcase type
+                               ('size #'qss-format-size)
+                               ('time #'qss-format-time)
+                               (_ #'qss-format-value)))))
+    (cons (car spec) plist)))
 
 (defun qss-format-value (value)
   "Return VALUE as text; nil is the empty string."
@@ -185,14 +196,17 @@ Numbers stay numbers, times become seconds, the rest is text."
 
 (defvar-local qss--table nil "The table this buffer shows.")
 
+(defvar-local qss--vtable-buffer nil
+  "Non-nil in buffers where qss inserts vtables (for the header fix).")
+
 (defun qss--fix-tty-header (_table widths spacer)
   "Align the vtable header on a text terminal (Emacs 29.3).
 When padding a header cell, vtable subtracts the column spacing and
 half a character, and on a terminal it computes in whole characters:
 every header cell becomes too narrow and short columns run together.
 Here every cell is set to WIDTHS[i] plus SPACER, like the rows below.
-Only in qss buffers and only without graphics."
-  (when (and (derived-mode-p 'qss-table-mode) (not (display-graphic-p)))
+Only in buffers where qss inserts tables and only without graphics."
+  (when (and qss--vtable-buffer (not (display-graphic-p)))
     (let* ((inhibit-read-only t)
            (end (1- (point)))                     ; before the newline
            (pos (save-excursion (forward-line -1) (point)))
@@ -274,25 +288,32 @@ every text in full (command lines with tens of thousands of characters)."
                                  (_ #'identity)))))
           (qss-table-columns table)))
 
+(defun qss-insert-vtable (table &optional keymap)
+  "Insert the rows of TABLE at point as a vtable.
+RET runs the default action of a row, \`a' offers its actions.
+KEYMAP, if given, is merged into the keymap of the table rows."
+  (setq qss--vtable-buffer t)
+  (if (null (qss-table-rows table))
+      (insert "(no rows)\n")
+    (make-vtable
+     :objects (qss-table-rows table)
+     :columns (qss--vtable-columns table)
+     ;; Header in the buffer, not in the header line: on a terminal the
+     ;; vtable header line is misaligned (Emacs 29.3).
+     :use-header-line nil
+     :face 'qss-table
+     :keymap keymap
+     :actions '("RET" qss--default "a" qss--actions-menu))))
+
 (defun qss--insert-table (table)
   "Insert TABLE into the current buffer."
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (propertize (qss-table-title table) 'face 'bold)
             (format "  (%d)\n\n" (length (qss-table-rows table))))
-    (if (null (qss-table-rows table))
-        (insert "(no rows)\n")
-      (make-vtable
-       :objects (qss-table-rows table)
-       :columns (qss--vtable-columns table)
-       ;; Header in the buffer, not in the header line: on a terminal the
-       ;; vtable header line is misaligned (Emacs 29.3).
-       :use-header-line nil
-       :face 'qss-table
-       ;; g on a row: read again, not only redraw (vtable binds g to
-       ;; `vtable-revert-command' otherwise).
-       :keymap (define-keymap "g" #'qss-refresh)
-       :actions '("RET" qss--default "a" qss--actions-menu)))))
+    ;; g on a row: read again, not only redraw (vtable binds g to
+    ;; `vtable-revert-command' otherwise).
+    (qss-insert-vtable table (define-keymap "g" #'qss-refresh))))
 
 (defun qss-show (table)
   "Show TABLE in a buffer of its own and return the buffer."

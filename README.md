@@ -5,13 +5,25 @@ as tables, and one small vocabulary that works on all of them — files,
 processes, property lists, rows of an SQLite table.
 
 ```
-M-x qss-eval
-qss: (files "~") (where (> :size 100000)) (sort-by size :desc) (first 10)
+M-x qss
+qss> (files "~") (where (> :size 100000)) (sort-by size :desc) (first 5)
+5 rows  [buffer]  files ~/ | where (> :size 100000) | sort-by size desc | first 5
+name                     type  size modified         mode       user
+big-archive.tar          file  2.1G 2026-10-20 09:12 -rw-r--r-- frido
+...
+qss> (select name size)
 ```
 
-The result is a table buffer. The rows stay what they are: `RET` opens
-the file, `a` offers its actions, `g` reads the directory again and
-applies the pipe once more.
+`M-x qss` opens a REPL: type a pipe, the table appears right below.
+The rows stay what they are: `RET` on a row opens the file, `a` offers
+its actions, `S` sorts by the column at point. A line that starts with
+a word, like `(select name size)` above, continues the table before it.
+`M-p`/`M-n` walk the history, `TAB` completes words, sources and column
+names, `[buffer]` opens a table in a buffer of its own, where `g` reads
+the source again.
+
+`M-x qss-eval` does the same from the minibuffer, with the result in a
+table buffer.
 
 Only what is built into Emacs 29 is used: `vtable`, `sqlite` and
 `cl-generic`. No other packages.
@@ -36,7 +48,7 @@ Or clone the repository, put the directory on your `load-path` and
 | `(processes)` | running processes |
 | `(sqlite FILE TABLE)` | rows of an SQLite table, as a query |
 | `(tables FILE)` | the tables of an SQLite file; `RET` shows the rows |
-| any list | its elements; property lists are rows |
+| any list | its elements; property lists are rows, other values have the column `value` |
 
 ## Words
 

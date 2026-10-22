@@ -158,6 +158,20 @@
     (should (equal (mapcar #'car (qss-table-columns (qss-> (files dir) (reject modified mode user))))
                    '(name type size)))))
 
+(ert-deftest qss-column-specs-do-not-grow ()
+  "Each stage keeps the column specs as they are, without repeating keys."
+  (qss-ptest--with-dir dir
+    (let* ((tab (qss-> (files dir) (where (like :name "%.el")) (sort-by size :desc)
+                       (first 5) (select name size modified)))
+           (spec (assq 'size (qss-table-columns tab))))
+      (should (equal spec '(size :type size :align right :format qss-format-size))))))
+
+(ert-deftest qss-plain-values-are-rows ()
+  "A list of numbers or strings is a table with the column value."
+  (should (equal (qss-> '(3 1 2) (sort-by value) collect) '(1 2 3)))
+  (should (equal (qss-> '(3 1 2) (where (> :value 1)) collect) '(3 2)))
+  (should (equal (mapcar #'car (qss-table-columns (qss-as-table '("a" "b")))) '(value))))
+
 (ert-deftest qss-select-projects-data ()
   "Property lists are cut down, objects are not."
   (let ((tab (qss-make-table "people" qss-ptest--people)))
