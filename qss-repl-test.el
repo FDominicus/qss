@@ -74,7 +74,8 @@
       (should (string-match-p "where" out))
       (should (string-suffix-p qss-repl-prompt out)))
     (let ((out (qss-rtest--send "(files \"/no/such/dir\")")))
-      (should (string-match-p "No such file" out))
+      ;; the message is in the language of the system; the path is in it either way
+      (should (string-match-p "/no/such/dir" out))
       (should (string-suffix-p qss-repl-prompt out)))))
 
 (ert-deftest qss-repl-incomplete-input-waits ()
