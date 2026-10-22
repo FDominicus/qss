@@ -1,0 +1,159 @@
+# qss — tables and one vocabulary for all collections in Emacs
+
+qss brings the idea of [Nushell](https://www.nushell.sh/) to Emacs: data
+as tables, and one small vocabulary that works on all of them — files,
+processes, property lists, rows of an SQLite table.
+
+```
+M-x qss-eval
+qss: (files "~") (where (> :size 100000)) (sort-by size :desc) (first 10)
+```
+
+The result is a table buffer. The rows stay what they are: `RET` opens
+the file, `a` offers its actions, `g` reads the directory again and
+applies the pipe once more.
+
+Only what is built into Emacs 29 is used: `vtable`, `sqlite` and
+`cl-generic`. No other packages.
+
+## Install
+
+Emacs 29.1 or later.
+
+```elisp
+(package-vc-install "https://github.com/FDominicus/qss")
+(require 'qss)
+```
+
+Or clone the repository, put the directory on your `load-path` and
+`(require 'qss)`.
+
+## Sources
+
+| Source | Rows |
+|---|---|
+| `(files DIR)` | files of DIR (TRAMP works) |
+| `(processes)` | running processes |
+| `(sqlite FILE TABLE)` | rows of an SQLite table, as a query |
+| `(tables FILE)` | the tables of an SQLite file; `RET` shows the rows |
+| any list | its elements; property lists are rows |
+
+## Words
+
+| Word | Meaning |
+|---|---|
+| `(where COND)` | rows for which COND holds |
+| `(select COL...)` / `(reject COL...)` | keep / drop columns |
+| `(sort-by COL [:desc])` | sort; missing values last |
+| `(first [N])` / `(last [N])` | the first / last N rows |
+| `(get COL)` | the values of one column |
+| `(group-by COL)` | one row per value with a count; `RET` shows the group |
+| `(each FORM)` | FORM with `it` bound to each row; results are the new rows |
+| `columns` | the column names |
+| `count` | the number of rows |
+| `collect` | the rows as a Lisp list |
+| `sql` | the SQL of a query (SQLite only) |
+
+`collect` after `get` returns the plain values.
+
+### Conditions
+
+Columns are keywords; everything else is Lisp, variables included:
+
+```elisp
+(where (> :size 10000))
+(where (and (>= :date since) (in :kind kinds)))
+(where (like :name "%.el"))
+(where (is-null :invoice-no))
+```
+
+Comparisons mean what they mean in SQL: `=`, `<` … work on numbers,
+strings and times (`(> :modified "2026-10-20")` works), `like` ignores
+case, and a missing value is NULL — comparing with it is unknown, so the
+same condition returns the same rows in memory and in SQLite.
+
+If `it` occurs, the condition is ordinary Lisp with `it` bound to the row:
+
+```elisp
+(where (string-prefix-p "." (qss-field it 'name)))
+```
+
+### SQLite
+
+On an SQLite source the pipe stays a query until the rows are needed.
+`where`, `sort-by`, `first`, `count`, `select`, `reject` and `columns`
+become SQL with `?` parameters; a word that cannot (a condition with
+`it`, `each`, `group-by`, `last`, `get`) fetches the rows and goes on in
+memory.
+
+```
+qss: (sqlite "~/data/shop.sqlite3" "Orders") (where (> :amount 100)) (sort-by order-date :desc) (first 20) sql
+SELECT *
+FROM "Orders"
+WHERE ("Amount" > ?)
+ORDER BY "OrderDate" IS NULL, "OrderDate" DESC
+LIMIT ?
+Parameters: (100 20)
+```
+
+Column and table names become keys mechanically: `OrderDate` →
+`order-date`, `HT_Orders` → `ht-orders`, `Straße` → `strasse`.
+Display fetches at most `qss-sql-display-limit` rows (1000).
+
+## In Lisp
+
+```elisp
+(qss-> (sqlite "~/data/shop.sqlite3" "Orders")
+       (where (> :amount 100))
+       (select order-no amount)
+       collect)
+;; => ((:order-no 4711 :amount 120.0) ...)
+
+(qss-display (qss-> (files "~/src") (where (like :name "%.el"))))
+```
+
+`qss->` returns a table, or a query on SQLite; `collect` turns either
+into a list, `qss-display` shows it.
+
+## Own row types
+
+A row type is a few methods:
+
+```elisp
+(cl-defmethod qss-columns ((_ my-thing)) '(name (size :type size) (date :type time)))
+(cl-defmethod qss-field ((x my-thing) name) ...)
+(cl-defmethod qss-default-action ((x my-thing)) ...)   ; RET
+(cl-defmethod qss-actions ((x my-thing)) (list (cons "Do it" #'my-do-it)))  ; a
+```
+
+## Examples
+
+```
+M-x qss-examples
+```
+
+shows all examples of `qss-examples.el` with their results; `[show]`
+displays a result as a table. The SQLite examples use a small demo
+database that is created in `temporary-file-directory`. The file is
+also meant to be read: every example is one form you can evaluate with
+`C-x C-e`.
+
+## Tests
+
+From inside Emacs:
+
+```
+M-x qss-run-tests
+```
+
+From a shell, from any directory:
+
+```
+emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
+```
+
+The SQLite tests are skipped when Emacs has no SQLite.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
