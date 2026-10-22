@@ -16,42 +16,14 @@
 ;; Or go through `qss-examples' form by form: put point after a form in
 ;; this file and press C-x C-e, or copy it into IELM.
 ;;
-;; The SQLite examples use a small demo database that
-;; `qss-examples-database' creates in `temporary-file-directory'.  The
+;; The SQLite examples use the small demo database that
+;; `qss-demo-database' creates in `temporary-file-directory'.  The
 ;; results in the comments are those of that database; examples on files
 ;; and processes depend on your machine.
 
 ;;; Code:
 
 (require 'qss)
-
-;;; ------------------------------------------------------------------
-;;; The demo database
-
-(defun qss-examples-database ()
-  "Return the file of the demo database, creating it if needed.
-Tables: Customers (CustomerNo, Name, City, Since) and Orders (OrderNo,
-CustomerNo, OrderDate, Amount, Status).  Status is NULL for open orders."
-  (let ((file (expand-file-name "qss-demo.sqlite3" temporary-file-directory)))
-    (unless (file-exists-p file)
-      (qss-sql--with-db db file
-        (sqlite-execute db "CREATE TABLE \"Customers\" (\"CustomerNo\" INTEGER PRIMARY KEY,
-          \"Name\" TEXT, \"City\" TEXT, \"Since\" TEXT)")
-        (dolist (row '((1 "Anna Meier" "Bruchsal" "2019-03-01")
-                       (2 "Bob Stone" "London" "2021-07-15")
-                       (3 "Clara Weiss" "Bruchsal" "2024-01-10")
-                       (4 "Dan Brown" nil "2025-05-05")))
-          (sqlite-execute db "INSERT INTO \"Customers\" VALUES (?,?,?,?)" (vconcat row)))
-        (sqlite-execute db "CREATE TABLE \"Orders\" (\"OrderNo\" INTEGER PRIMARY KEY,
-          \"CustomerNo\" INTEGER, \"OrderDate\" TEXT, \"Amount\" REAL, \"Status\" TEXT)")
-        (dolist (row '((4711 1 "2026-09-01" 120.0 "paid")
-                       (4712 2 "2026-09-03" 80.5 "paid")
-                       (4713 1 "2026-09-20" 300.0 nil)
-                       (4714 3 "2026-10-02" 45.0 "paid")
-                       (4715 4 "2026-10-05" 999.99 nil)
-                       (4716 3 "2026-10-12" 150.0 "cancelled")))
-          (sqlite-execute db "INSERT INTO \"Orders\" VALUES (?,?,?,?,?)" (vconcat row)))))
-    file))
 
 ;;; ------------------------------------------------------------------
 ;;; Own row type: buffers
@@ -122,21 +94,21 @@ CustomerNo, OrderDate, Amount, Status).  Status is NULL for open orders."
 
     ("NULL as in SQL: (not (= ...)) does not keep rows without a value"
      ;; => ("Bob Stone")   Dan has no city: unknown, so not kept
-     (qss-> (sqlite (qss-examples-database) "Customers")
+     (qss-> (sqlite (qss-demo-database) "Customers")
             (where (not (= :city "Bruchsal")))
             (get name)
             collect))
 
     ("SQLite: the tables of a database; RET on one shows its rows"
-     (qss-> (tables (qss-examples-database))))
+     (qss-> (tables (qss-demo-database))))
 
     ("SQLite: the columns of a table, with their names in the database"
      ;; => order-no OrderNo INTEGER, customer-no CustomerNo INTEGER, ...
-     (qss-> (sqlite (qss-examples-database) "Orders") columns))
+     (qss-> (sqlite (qss-demo-database) "Orders") columns))
 
     ("SQLite: a pipe becomes one query"
      ;; => (4715 4713 4716 4711)
-     (qss-> (sqlite (qss-examples-database) "Orders")
+     (qss-> (sqlite (qss-demo-database) "Orders")
             (where (> :amount 100))
             (sort-by amount :desc)
             (select order-no amount)))
@@ -144,7 +116,7 @@ CustomerNo, OrderDate, Amount, Status).  Status is NULL for open orders."
     ("SQLite: the SQL of that pipe"
      ;; SELECT "OrderNo", "Amount" FROM "Orders" WHERE ("Amount" > ?)
      ;; ORDER BY "Amount" IS NULL, "Amount" DESC   Parameters: (100)
-     (qss-> (sqlite (qss-examples-database) "Orders")
+     (qss-> (sqlite (qss-demo-database) "Orders")
             (where (> :amount 100))
             (sort-by amount :desc)
             (select order-no amount)
@@ -153,25 +125,25 @@ CustomerNo, OrderDate, Amount, Status).  Status is NULL for open orders."
     ("SQLite: Lisp values become parameters, lists work with in"
      ;; => (4711 4713 4714 4716)
      (let ((customers '(1 3)) (from "2026-09-01"))
-       (qss-> (sqlite (qss-examples-database) "Orders")
+       (qss-> (sqlite (qss-demo-database) "Orders")
               (where (and (in :customer-no customers) (>= :order-date from)))
               (get order-no)
               collect)))
 
     ("SQLite: open orders, i.e. Status is NULL"
      ;; => 2
-     (qss-> (sqlite (qss-examples-database) "Orders") (where (is-null :status)) count))
+     (qss-> (sqlite (qss-demo-database) "Orders") (where (is-null :status)) count))
 
     ("SQLite: like ignores case, as in SQL"
      ;; => ("Anna Meier" "Clara Weiss")
-     (qss-> (sqlite (qss-examples-database) "Customers")
+     (qss-> (sqlite (qss-demo-database) "Customers")
             (where (or (like :name "%MEIER") (like :name "c%")))
             (get name)
             collect))
 
     ("SQLite: first SQL, then Lisp with it (fetched rows, in memory)"
      ;; => ("Bob Stone" "Dan Brown")
-     (qss-> (sqlite (qss-examples-database) "Customers")
+     (qss-> (sqlite (qss-demo-database) "Customers")
             (where (> :since "2020-01-01"))
             (where (string-match-p "o" (plist-get it :name)))
             (get name)
@@ -179,11 +151,11 @@ CustomerNo, OrderDate, Amount, Status).  Status is NULL for open orders."
 
     ("SQLite: orders per status (group-by runs in memory)"
      ;; => paid 3, nil 2, cancelled 1
-     (qss-> (sqlite (qss-examples-database) "Orders") (group-by status) (sort-by count :desc)))
+     (qss-> (sqlite (qss-demo-database) "Orders") (group-by status) (sort-by count :desc)))
 
     ("Using the rows in Lisp: the total of the paid orders"
      ;; => 245.5
-     (let ((amounts (qss-> (sqlite (qss-examples-database) "Orders")
+     (let ((amounts (qss-> (sqlite (qss-demo-database) "Orders")
                            (where (= :status "paid"))
                            (get amount)
                            collect)))
@@ -191,10 +163,10 @@ CustomerNo, OrderDate, Amount, Status).  Status is NULL for open orders."
 
     ("Joining by hand: orders with the customer's name"
      ;; => ((:order-no 4711 :name "Anna Meier" :amount 120.0) ...)
-     (let* ((customers (qss-> (sqlite (qss-examples-database) "Customers") collect))
+     (let* ((customers (qss-> (sqlite (qss-demo-database) "Customers") collect))
             (names (mapcar (lambda (c) (cons (plist-get c :customer-no) (plist-get c :name)))
                            customers)))
-       (qss-> (sqlite (qss-examples-database) "Orders")
+       (qss-> (sqlite (qss-demo-database) "Orders")
               (where (not-null :status))
               (each (list :order-no (plist-get it :order-no)
                           :name (cdr (assq (plist-get it :customer-no) names))

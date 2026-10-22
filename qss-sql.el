@@ -11,13 +11,15 @@
 ;; Layer 3 of qss.  A table in an SQLite file is a source like files and
 ;; processes, with the same words:
 ;;
-;;   (qss-> (sqlite "~/data/shop.sqlite3" "Orders")
+;;   (qss-> (sqlite (qss-demo-database) "Orders")
 ;;          (where (> :amount 100))
 ;;          (sort-by order-date :desc)
 ;;          (first 20)
 ;;          (select order-no order-date amount))
 ;;
-;;   (qss-> (tables "~/data/shop.sqlite3") (where (like :name "%Order%")))
+;;   (qss-> (tables (qss-demo-database)) (where (like :name "%Order%")))
+;;
+;; `qss-demo-database' creates a small database to try this with.
 ;;
 ;; The pipe stays a query (a relation) until someone needs the rows
 ;; (display, or a word that cannot become SQL), as in dbplyr:
@@ -167,8 +169,8 @@ TABLES is a list of (NAME . COLUMNS), COLUMNS a list of (KEY NAME TYPE).")
 FILE and TABLE (the database name) stay the same through all stages;
 COLUMNS is the schema of the table, or the selection after select or
 reject.  INNER is a query this one is a subquery over (after LIMIT).
-WHERES: list of (SQL . PARAMS).  ORDER: list of (KEY . DESCENDING),
-most important first.  LIMIT: a number or nil.  PROJECTED: t after
+WHERES: list of (SQL . PARAMS).  ORDER: list of (KEY DESCENDING SQL),
+most important first; SQL is the quoted column name.  LIMIT: a number or nil.  PROJECTED: t after
 select/reject; then the query names its columns.  TITLE: the pipe so far."
   file table columns inner wheres order limit projected title)
 
@@ -286,8 +288,8 @@ Column names are looked up in REL."
                     ;; NULL always last, as in memory
                     (concat "\nORDER BY "
                             (mapconcat (lambda (o)
-                                         (let ((c (qss-sql--column rel (car o))))
-                                           (format "%s IS NULL, %s%s" c c (if (cdr o) " DESC" ""))))
+                                         (let ((c (nth 2 o)))
+                                           (format "%s IS NULL, %s%s" c c (if (nth 1 o) " DESC" ""))))
                                        order ", ")))
                   (when limit "\nLIMIT ?"))
           (append (cdr inner)
@@ -368,10 +370,11 @@ A column is a number column if all its values are numbers."
   (let* ((key (qss--name col))
          (desc (qss--descending-p dir))
          (base (if (qss-relation-limit rel) (qss-sql--wrap rel) rel)))
-    (qss-sql--column base key)          ; does the column exist?
+    ;; The column is looked up now, not when the SQL is built: a later
+    ;; select may drop it, and ORDER BY may still name it.
     (qss-sql--copy base (format "sort-by %s%s" key (if desc " desc" ""))
                    ;; the new order first, the old one breaks ties
-                   :order (cons (cons key desc)
+                   :order (cons (list key desc (qss-sql--column base key))
                                 (cl-remove key (qss-relation-order base) :key #'car)))))
 
 (cl-defmethod qss-first ((rel qss-relation) &optional n)
@@ -465,6 +468,37 @@ RET on one of them shows its rows."
         (cons "Count" (lambda (r) (message "%s: %d rows" (qss-db-table-name r)
                                            (qss-count (qss-sqlite (qss-db-table-file r)
                                                                   (qss-db-table-name r))))))))
+
+;;; ------------------------------------------------------------------
+;;; A demo database, to try qss without a database of your own
+
+;;;###autoload
+(defun qss-demo-database ()
+  "Return the file of a small demo database, creating it if needed.
+The file is qss-demo.sqlite3 in the variable `temporary-file-directory'.
+Tables: Customers (CustomerNo, Name, City, Since) and Orders (OrderNo,
+CustomerNo, OrderDate, Amount, Status); Status is NULL for open orders.
+Try:  (qss-> (tables (qss-demo-database)))"
+  (let ((file (expand-file-name "qss-demo.sqlite3" temporary-file-directory)))
+    (unless (file-exists-p file)
+      (qss-sql--with-db db file
+        (sqlite-execute db "CREATE TABLE \"Customers\" (\"CustomerNo\" INTEGER PRIMARY KEY,
+          \"Name\" TEXT, \"City\" TEXT, \"Since\" TEXT)")
+        (dolist (row '((1 "Anna Meier" "Bruchsal" "2019-03-01")
+                       (2 "Bob Stone" "London" "2021-07-15")
+                       (3 "Clara Weiss" "Bruchsal" "2024-01-10")
+                       (4 "Dan Brown" nil "2025-05-05")))
+          (sqlite-execute db "INSERT INTO \"Customers\" VALUES (?,?,?,?)" (vconcat row)))
+        (sqlite-execute db "CREATE TABLE \"Orders\" (\"OrderNo\" INTEGER PRIMARY KEY,
+          \"CustomerNo\" INTEGER, \"OrderDate\" TEXT, \"Amount\" REAL, \"Status\" TEXT)")
+        (dolist (row '((4711 1 "2026-09-01" 120.0 "paid")
+                       (4712 2 "2026-09-03" 80.5 "paid")
+                       (4713 1 "2026-09-20" 300.0 nil)
+                       (4714 3 "2026-10-02" 45.0 "paid")
+                       (4715 4 "2026-10-05" 999.99 nil)
+                       (4716 3 "2026-10-12" 150.0 "cancelled")))
+          (sqlite-execute db "INSERT INTO \"Orders\" VALUES (?,?,?,?,?)" (vconcat row)))))
+    file))
 
 ;;; ------------------------------------------------------------------
 ;;; Registering with qss->

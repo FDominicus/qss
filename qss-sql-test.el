@@ -233,6 +233,17 @@ the mapping of names to keys."
                                                         (select kunde-nr))))
                    '((:kunde-nr 1) (:kunde-nr 3))))
     (should (= 5 (qss-> (qss-stest--k) (select name1) count)))
+    ;; sort first, then select: ORDER BY may name a column that is not selected
+    (let ((rel (qss-> (qss-stest--k) (sort-by umsatz :desc) (select kunde-nr name1))))
+      (should (string-search "SELECT \"KundeNr\", \"Name1\"" (qss-sql rel)))
+      (should (string-search "ORDER BY \"Umsatz\" IS NULL, \"Umsatz\" DESC" (qss-sql rel)))
+      (should (equal (mapcar (lambda (r) (plist-get r :kunde-nr)) (qss-collect rel)) '(1 5 2 4 3))))
+    (should (equal (qss-> (qss-stest--k) (where (> :umsatz 100)) (sort-by umsatz) (select name1)
+                          (get name1) collect)
+                   '("Bernd" "Eva" "Anna Meier")))
+    ;; and in memory the same
+    (should (equal (qss-> (qss-as-table (qss-stest--k)) (sort-by umsatz :desc) (select kunde-nr) (get kunde-nr) collect)
+                   '(1 5 2 4 3)))
     (should (equal (qss-> (qss-stest--k) (where (> :umsatz 500)) (select kunde-nr umsatz) collect)
                    '((:kunde-nr 1 :umsatz 1200.5) (:kunde-nr 5 :umsatz 999.99))))
     (should-error (qss-> (qss-stest--k) (select no-such-column)) :type 'user-error)))
@@ -282,6 +293,27 @@ the mapping of names to keys."
         (with-current-buffer buf
           (should (string-match-p "Eva" (buffer-string)))
           (kill-buffer))))))
+
+(ert-deftest qss-sql-demo-database ()
+  "The demo database exists after the first call and has both tables."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let ((temporary-file-directory (make-temp-file "qss-demo-" t)))
+    (unwind-protect
+        (let ((file (qss-demo-database)))
+          (should (file-exists-p file))
+          (should (equal (qss-demo-database) file))          ; created once
+          (should (equal (mapcar (lambda (r) (qss-field r 'name))
+                                 (qss-collect (qss-tables file)))
+                         '("Customers" "Orders")))
+          (should (= 6 (qss-> (sqlite (qss-demo-database) "Orders") count)))
+          ;; the example of the README
+          (should (equal (qss-> (sqlite (qss-demo-database) "Orders")
+                                (where (> :amount 100))
+                                (select order-no amount)
+                                collect)
+                         '((:order-no 4711 :amount 120.0) (:order-no 4713 :amount 300.0)
+                           (:order-no 4715 :amount 999.99) (:order-no 4716 :amount 150.0)))))
+      (delete-directory temporary-file-directory t))))
 
 (provide 'qss-sql-test)
 ;;; qss-sql-test.el ends here

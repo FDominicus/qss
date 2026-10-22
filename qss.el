@@ -21,15 +21,18 @@
 ;;   M-x qss-eval
 ;;   qss: (files "~") (where (> :size 100000)) (sort-by size :desc) (first 10)
 ;;   qss: (processes) (group-by user) (sort-by count :desc)
-;;   qss: (sqlite "~/data/shop.sqlite3" "Orders") (where (> :amount 100)) (first 20)
+;;   qss: (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (first 20)
 ;;
 ;; In Lisp the same is a macro:
 ;;
-;;   (qss-> (sqlite "~/data/shop.sqlite3" "Orders")
-;;          (where (and (> :amount 100) (like :customer "A%")))
+;;   (qss-> (sqlite (qss-demo-database) "Orders")
+;;          (where (and (> :amount 100) (in :customer-no '(1 3))))
 ;;          (sort-by order-date :desc)
-;;          (select order-no customer amount)
+;;          (select order-no customer-no amount)
 ;;          collect)
+;;
+;; `qss-demo-database' creates a small SQLite database to try things
+;; with; M-x qss-examples shows many more examples.
 ;;
 ;; Rows stay the objects they are: in the table buffer RET opens a
 ;; file, `a' offers the actions of the row, `g' reads the source again.

@@ -11,7 +11,7 @@
 ;; Layer 2 of qss: words that work the same on every `qss-table',
 ;; whether the rows are files, processes or property lists.
 ;;
-;;   (qss-> (files "~/repos")
+;;   (qss-> (files "~")
 ;;          (where (> :size 10000))
 ;;          (sort-by modified :desc)
 ;;          (select name size modified)

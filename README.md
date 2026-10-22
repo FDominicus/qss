@@ -80,6 +80,14 @@ If `it` occurs, the condition is ordinary Lisp with `it` bound to the row:
 
 ### SQLite
 
+To try it without a database of your own, `(qss-demo-database)`
+creates a small one with the tables `Customers` and `Orders`; all
+SQLite examples here use it.
+
+```
+qss: (tables (qss-demo-database))
+```
+
 On an SQLite source the pipe stays a query until the rows are needed.
 `where`, `sort-by`, `first`, `count`, `select`, `reject` and `columns`
 become SQL with `?` parameters; a word that cannot (a condition with
@@ -87,7 +95,7 @@ become SQL with `?` parameters; a word that cannot (a condition with
 memory.
 
 ```
-qss: (sqlite "~/data/shop.sqlite3" "Orders") (where (> :amount 100)) (sort-by order-date :desc) (first 20) sql
+qss: (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (sort-by order-date :desc) (first 20) sql
 SELECT *
 FROM "Orders"
 WHERE ("Amount" > ?)
@@ -103,13 +111,13 @@ Display fetches at most `qss-sql-display-limit` rows (1000).
 ## In Lisp
 
 ```elisp
-(qss-> (sqlite "~/data/shop.sqlite3" "Orders")
+(qss-> (sqlite (qss-demo-database) "Orders")
        (where (> :amount 100))
        (select order-no amount)
        collect)
 ;; => ((:order-no 4711 :amount 120.0) ...)
 
-(qss-display (qss-> (files "~/src") (where (like :name "%.el"))))
+(qss-display (qss-> (files user-emacs-directory) (where (like :name "%.el"))))
 ```
 
 `qss->` returns a table, or a query on SQLite; `collect` turns either
