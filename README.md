@@ -25,6 +25,29 @@ the source again.
 `M-x qss-eval` does the same from the minibuffer, with the result in a
 table buffer.
 
+### The REPL as a shell
+
+```
+~/ qss> cd ~/src/project
+~/src/project/ qss> !git log --oneline -5
+~/src/project/ qss> !grep -n TODO main.el
+~/src/project/ qss> (where (like :line "%urgent%"))
+~/src/project/ qss> (files) (where (= :type "dir"))
+```
+
+- `!PROGRAM ARGS` runs a program directly, **without a shell**. The output
+  appears as text, and it is the last table too, one row per line in the
+  column `line`, so the next input can filter it. Quotes `"..."` and
+  `'...'` and `~` work as in a shell; `;`, `|`, `>` and globs are plain
+  characters. For those, say so: `!sh -c "make && make test"`, or use
+  Nushell: `(nu "ls *.el | where size > 10kb")`.
+- `cd DIR` changes the directory (`cd ..`, `cd` for home, spaces in names
+  need no quotes). The prompt shows it; `files`, `nu`, `run` and `!` all
+  run there — on the remote host in a TRAMP directory.
+- `RET` on a directory in a table does `cd` there and lists its files.
+- `TAB` completes file names after `!` and `cd` and inside strings.
+- `(run PROGRAM ARGS...)` is the same as a source for pipes.
+
 Only what is built into Emacs 29 is used: `vtable`, `sqlite` and
 `cl-generic`. No other packages.
 
@@ -49,6 +72,7 @@ Or clone the repository, put the directory on your `load-path` and
 | `(sqlite FILE TABLE)` | rows of an SQLite table, as a query |
 | `(tables FILE)` | the tables of an SQLite file; `RET` shows the rows |
 | `(nu COMMAND)` | the result of a Nushell command |
+| `(run PROGRAM ARGS...)` | the output lines of a program (column `line`), no shell |
 | any list | its elements; property lists are rows, other values have the column `value` |
 
 ### Nushell

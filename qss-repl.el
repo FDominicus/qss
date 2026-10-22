@@ -18,23 +18,34 @@
 ;;   qss> (where (like :name "%.el"))         <- continues the table above
 ;;
 ;; Input:
+;;   - !PROGRAM ARGS runs a program directly, without a shell:
+;;       !fossil changes      !git log --oneline -5      !make test
+;;     The output appears as text; it is also the last table, with one
+;;     row per line in the column `line', so the next input can go on
+;;     with (where (like :line "%error%")).  No globs and no pipes in
+;;     these lines: for that, (nu "ls *.el | ...").
+;;   - cd DIR changes the directory of the REPL (cd .. and plain cd for
+;;     home work too); the prompt shows it.  files, nu, run and !
+;;     all run there, on the remote host in a TRAMP directory.
 ;;   - Several forms, or one form starting with a source (files,
-;;     processes, sqlite, tables), are a pipe as in `qss->'.
+;;     processes, sqlite, tables, nu, run), are a pipe as in `qss->'.
 ;;   - A form starting with a word (where, select, sort-by ...)
 ;;     continues the last table, like $in in Nushell.
 ;;   - Anything else is ordinary Lisp; wrap it in (progn ...) if it
 ;;     looks like a word, e.g. Lisp's own `last' or `get'.
 ;;   - The last table is also in the variable `qss-last', for Lisp.
 ;;
-;; In a table: RET runs the default action of the row (open the file
-;; ...), `a' offers its actions, `S' sorts by the column at point.
+;; In a table: RET runs the default action of the row (open the file,
+;; enter a directory: cd plus its files), `a' offers its actions, `S'
+;; sorts by the column at point.
 ;; Long tables show the first `qss-repl-max-rows' rows and a [show all]
 ;; button.  [buffer] opens the table in a buffer of its own, where `g'
 ;; reads it again.
 ;;
 ;; Keys: RET send (or a newline while the input is not complete),
 ;; M-p / M-n history, TAB completion of words, sources and the column
-;; names of the last table, C-c M-o clear the buffer.
+;; names of the last table, and of file names after ! and cd and inside
+;; strings; C-c M-o clear the buffer.
 
 ;;; Code:
 
@@ -54,6 +65,10 @@
 
 (defface qss-repl-prompt '((t :inherit minibuffer-prompt))
   "Face of the qss REPL prompt."
+  :group 'qss)
+
+(defface qss-repl-directory '((t :inherit font-lock-keyword-face))
+  "Face of the directory in the qss REPL prompt."
   :group 'qss)
 
 (defface qss-repl-title '((t :inherit bold))
@@ -83,6 +98,8 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
    ";; qss.  Type a pipe and RET, e.g.\n"
    ";;   (files \"~\") (where (> :size 100000)) (sort-by size :desc) (first 5)\n"
    ";;   (sqlite (qss-demo-database) \"Orders\") (where (> :amount 100))\n"
+   ";;   !git log --oneline -5       runs a program, no shell\n"
+   ";;   cd ~/src                    changes the directory\n"
    ";; A line starting with a word, e.g. (where ...), continues the last table.\n"
    ";; RET/a/S on a table row; M-p/M-n history; TAB completes; M-x qss-examples.\n"))
 
@@ -108,6 +125,7 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
   (font-lock-mode -1)
   (setq-local truncate-lines t)
   (setq-local qss--vtable-buffer t)
+  (setq-local qss-row-action-function #'qss-repl--row-action)
   (setq qss-repl--input-start (make-marker))
   (add-hook 'completion-at-point-functions #'qss-repl-completion-at-point nil t))
 
@@ -142,7 +160,9 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
   (let ((inhibit-read-only t))
     (goto-char (point-max))
     (unless (bolp) (insert "\n"))
-    (insert (propertize qss-repl-prompt 'face 'qss-repl-prompt))
+    (insert (propertize (abbreviate-file-name default-directory) 'face 'qss-repl-directory)
+            " "
+            (propertize qss-repl-prompt 'face 'qss-repl-prompt))
     (qss-repl--protect (point-min) (point))
     (set-marker qss-repl--input-start (point))))
 
@@ -230,14 +250,91 @@ See the commentary of qss-repl.el for how the input is understood."
    ;; Lisp
    (t (eval (car forms) t))))
 
+;;; Shell lines: !program and cd
+
+(defconst qss-repl--cd-regexp "\\`[ \t]*!?cd\\(?:[ \t]+\\(.*?\\)\\)?[ \t]*\\'"
+  "A cd line; group 1 is the directory.")
+
+(defun qss-repl--shell-line-p (input)
+  "Return non-nil if INPUT is a shell line (!program or cd) rather than Lisp."
+  (or (string-match-p "\\`[ \t]*!" input)
+      (string-match-p qss-repl--cd-regexp input)))
+
+(defun qss-repl-split-words (line)
+  "Split LINE into words as a shell would, but without its other powers.
+Whitespace separates words; \"...\" and '...' keep them together (with
+backslash escapes inside double quotes); a backslash protects the next
+character.  ; | > & * have no special meaning: there is no shell."
+  (let ((words nil) (word nil) (in-word nil) (i 0) (n (length line)))
+    (while (< i n)
+      (let ((c (aref line i)))
+        (cond
+         ((memq c '(?\s ?\t ?\n))
+          (when in-word (push (apply #'string (nreverse word)) words))
+          (setq word nil in-word nil))
+         ((eq c ?\\)
+          (setq in-word t)
+          (when (< (1+ i) n) (setq i (1+ i)) (push (aref line i) word)))
+         ((eq c ?')
+          (setq in-word t)
+          (let ((end (or (cl-position ?' line :start (1+ i))
+                         (user-error "Missing closing ' in: %s" line))))
+            (setq word (append (nreverse (string-to-list (substring line (1+ i) end))) word)
+                  i end)))
+         ((eq c ?\")
+          (setq in-word t i (1+ i))
+          (while (and (< i n) (not (eq (aref line i) ?\")))
+            (when (and (eq (aref line i) ?\\) (< (1+ i) n))
+              (setq i (1+ i)))
+            (push (aref line i) word)
+            (setq i (1+ i)))
+          (unless (< i n) (user-error "Missing closing \" in: %s" line)))
+         (t (setq in-word t) (push c word))))
+      (setq i (1+ i)))
+    (when in-word (push (apply #'string (nreverse word)) words))
+    (nreverse words)))
+
+(defun qss-repl--expand-arg (word)
+  "Return WORD with a leading ~ expanded, as a shell would."
+  (if (string-match-p "\\`~\\(?:/\\|\\'\\)" word)
+      (expand-file-name word)
+    word))
+
+(defun qss-repl-cd (dir)
+  "Change the directory of the REPL to DIR (home if DIR is nil or empty)."
+  (let* ((dir (if (or (null dir) (string-empty-p dir)) "~" dir))
+         (dir (if (string-match "\\`\"\\(.*\\)\"\\'" dir) (match-string 1 dir) dir))
+         (full (file-name-as-directory (expand-file-name dir))))
+    (unless (file-directory-p full)
+      (user-error "No such directory: %s" full))
+    (setq default-directory full)))
+
+(defun qss-repl--run-line (input)
+  "Run the shell line INPUT; insert its output and return the value for `qss-last'."
+  (if (string-match qss-repl--cd-regexp input)
+      (progn (qss-repl-cd (match-string 1 input)) nil)
+    (let* ((words (mapcar #'qss-repl--expand-arg
+                          (qss-repl-split-words
+                           (substring (string-trim-left input) 1)))))
+      (unless words (user-error "Nothing to run after !"))
+      (let ((table (apply #'qss-run words)))
+        (dolist (row (qss-table-rows table))
+          (insert (plist-get row :line) "\n"))
+        (when (string-match "\\[exit \\(.*\\)\\]\\'" (qss-table-title table))
+          (insert (propertize (format "[exit %s]" (match-string 1 (qss-table-title table)))
+                              'face 'qss-repl-error)
+                  "\n"))
+        table))))
+
 (defun qss-repl-send ()
   "Evaluate the input, or insert a newline while it is incomplete.
 On output text, move to the end of the input."
   (interactive)
   (if (< (point) qss-repl--input-start)
       (goto-char (point-max))
-    (let ((input (buffer-substring-no-properties qss-repl--input-start (point-max))))
-      (if (qss-repl--incomplete-p input)
+    (let* ((input (buffer-substring-no-properties qss-repl--input-start (point-max)))
+           (shell (qss-repl--shell-line-p input)))
+      (if (and (not shell) (qss-repl--incomplete-p input))
           (newline-and-indent)
         (unless (string-blank-p input)
           (push (string-trim input) qss-repl--history))
@@ -246,14 +343,43 @@ On output text, move to the end of the input."
           (goto-char (point-max))
           (insert "\n")
           (condition-case err
-              (let ((value (qss-repl-evaluate (qss-repl--read-forms input))))
-                (when (or (qss-table-p value) (qss-relation-p value))
-                  (setq qss-last value))
-                (unless (string-blank-p input)
-                  (qss-repl--print value)))
+              (if shell
+                  (let ((value (qss-repl--run-line input)))
+                    (when value (setq qss-last value)))
+                (let ((value (qss-repl-evaluate (qss-repl--read-forms input))))
+                  (when (or (qss-table-p value) (qss-relation-p value))
+                    (setq qss-last value))
+                  (unless (string-blank-p input)
+                    (qss-repl--print value))))
             (error
              (insert (propertize (error-message-string err) 'face 'qss-repl-error) "\n"))))
         (qss-repl--prompt)))))
+
+(defun qss-repl-submit (input)
+  "Put INPUT at the prompt and send it, as if typed."
+  (goto-char (point-max))
+  (let ((inhibit-read-only t))
+    (delete-region qss-repl--input-start (point-max)))
+  (insert input)
+  (qss-repl-send))
+
+(defun qss-repl--row-directory (row)
+  "Return the directory ROW stands for, or nil.
+A directory row from `files', or a row with :type \"dir\" from Nushell."
+  (cond ((and (qss-file-p row) (qss-field row 'dir-p)) (qss-file-path row))
+        ((and (consp row) (keywordp (car row))
+              (equal (plist-get row :type) "dir") (stringp (plist-get row :name)))
+         (expand-file-name (plist-get row :name)
+                           (or (and (boundp 'qss-nu--dirs) (gethash row qss-nu--dirs))
+                               default-directory)))))
+
+(defun qss-repl--row-action (row)
+  "Run RET on ROW in the REPL: enter a directory in place, otherwise as usual."
+  (let ((dir (qss-repl--row-directory row)))
+    (if dir
+        (progn (qss-repl-submit (concat "cd " (abbreviate-file-name dir)))
+               (qss-repl-submit "(files)"))
+      (qss-default-action row))))
 
 ;;; ------------------------------------------------------------------
 ;;; History, clearing, completion
@@ -295,11 +421,29 @@ On output text, move to the end of the input."
   (cond ((qss-table-p qss-last) (mapcar #'car (qss-table-columns qss-last)))
         ((qss-relation-p qss-last) (mapcar #'car (qss-relation-columns qss-last)))))
 
+(defun qss-repl--file-completion ()
+  "Return a completion of the file name before point, or nil.
+In a shell line (!program, cd) and inside a string."
+  (let ((input (buffer-substring-no-properties qss-repl--input-start (point-max))))
+    (cond
+     ((qss-repl--shell-line-p input)
+      (let ((start (save-excursion
+                     (skip-chars-backward "^ \t\n" qss-repl--input-start)
+                     (when (eq (char-after) ?!) (forward-char))
+                     (point))))
+        (list start (point) #'completion-file-name-table :exclusive 'no)))
+     ((nth 3 (syntax-ppss))
+      (list (1+ (nth 8 (syntax-ppss))) (point) #'completion-file-name-table
+            :exclusive 'no)))))
+
 (defun qss-repl-completion-at-point ()
   "Complete words, sources and the column names of the last table.
 Column names are offered plain (for select, sort-by ...) and as
-keywords (for conditions)."
+keywords (for conditions).  After ! and cd and inside a string, file
+names are completed."
   (when (and qss-repl--input-start (>= (point) qss-repl--input-start))
+   (or
+    (qss-repl--file-completion)
     (let ((bounds (bounds-of-thing-at-point 'symbol)))
       (when bounds
         (let ((columns (qss-repl--column-names)))
@@ -309,7 +453,7 @@ keywords (for conditions)."
                         (mapcar #'symbol-name columns)
                         (mapcar (lambda (c) (format ":%s" c)) columns)
                         '("qss-demo-database" "qss-last"))
-                :exclusive 'no))))))
+                :exclusive 'no)))))))
 
 (provide 'qss-repl)
 ;;; qss-repl.el ends here

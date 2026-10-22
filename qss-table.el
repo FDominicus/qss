@@ -342,9 +342,14 @@ KEYMAP, if given, is merged into the keymap of the table rows."
   "Return the object of the row at point."
   (or (vtable-current-object) (user-error "No row here")))
 
+(defvar-local qss-row-action-function nil
+  "Function RET calls on a table row in this buffer.
+If nil, `qss-default-action'.  The qss REPL uses it to enter
+directories in place.")
+
 (defun qss--default (row)
-  "Run the default action of ROW."
-  (qss-default-action row))
+  "Run the default action of ROW (see `qss-row-action-function')."
+  (funcall (or qss-row-action-function #'qss-default-action) row))
 
 (defun qss--actions-menu (row)
   "Choose one of the actions of ROW and run it."
@@ -468,6 +473,30 @@ Works with TRAMP paths too."
           (delete-directory path t)
         (delete-file path))
       (qss-refresh))))
+
+;;; ------------------------------------------------------------------
+;;; Source: programs
+
+(defun qss-run (program &rest args)
+  "Run PROGRAM with ARGS, without a shell, and return its output as a table.
+Each output line is a row (:line TEXT); standard error is mixed in.
+The program runs in `default-directory' (on the remote host in a TRAMP
+directory) and gets no input.  If it exits with a status other than 0,
+the title says so."
+  (let* ((dir default-directory)
+         (status nil)
+         (text (with-temp-buffer
+                 (setq status (apply #'process-file program nil t nil args))
+                 (buffer-string)))
+         (lines (split-string text "\n")))
+    ;; the newline after the last line does not start another line
+    (when (and lines (equal (car (last lines)) ""))
+      (setq lines (butlast lines)))
+    (qss-make-table (concat (mapconcat #'identity (cons program args) " ")
+                            (if (eql status 0) "" (format "  [exit %s]" status)))
+                    (mapcar (lambda (l) (list :line l)) lines)
+                    '(line)
+                    (lambda () (let ((default-directory dir)) (apply #'qss-run program args))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Commands

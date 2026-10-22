@@ -161,5 +161,101 @@
     (insert "ok")
     (should (string-suffix-p "ok" (buffer-string)))))
 
+;;; The REPL as a shell
+
+(defmacro qss-rtest--with-tree (var &rest body)
+  "Bind VAR to a directory with log.txt, src/ and \"sub dir/\", then run BODY."
+  (declare (indent 1))
+  `(let ((,var (file-name-as-directory (make-temp-file "qss-shell-" t))))
+     (unwind-protect
+         (progn
+           (make-directory (expand-file-name "src" ,var))
+           (make-directory (expand-file-name "sub dir" ,var))
+           (with-temp-file (expand-file-name "log.txt" ,var)
+             (insert "alpha error one\nbeta ok\ngamma error two\n"))
+           ,@body)
+       (delete-directory ,var t))))
+
+(ert-deftest qss-repl-split-words ()
+  (should (equal (qss-repl-split-words "sh -c \"echo out; echo err >&2; exit 3\"")
+                 '("sh" "-c" "echo out; echo err >&2; exit 3")))
+  (should (equal (qss-repl-split-words "echo \"a  b\" 'it s'") '("echo" "a  b" "it s")))
+  (should (equal (qss-repl-split-words "grep \"x\\\"y\" f") '("grep" "x\"y" "f")))
+  (should (equal (qss-repl-split-words "a\\ b c") '("a b" "c")))
+  (should (equal (qss-repl-split-words "printf %s;x | y") '("printf" "%s;x" "|" "y")))
+  (should (equal (qss-repl-split-words "  ") nil))
+  (should-error (qss-repl-split-words "echo 'open") :type 'user-error))
+
+(ert-deftest qss-repl-cd-and-prompt ()
+  (qss-rtest--with-tree dir
+    (qss-rtest--with-repl
+      (qss-rtest--send (concat "cd " dir))
+      (should (equal default-directory dir))
+      (should (string-suffix-p (concat (abbreviate-file-name dir) " qss> ") (buffer-string)))
+      (qss-rtest--send "cd sub dir")                 ; a space in the name, no quotes
+      (should (equal default-directory (expand-file-name "sub dir/" dir)))
+      (qss-rtest--send "cd ..")
+      (should (equal default-directory dir))
+      (qss-rtest--send "cd \"src\"")
+      (should (equal default-directory (expand-file-name "src/" dir)))
+      (qss-rtest--send "cd")
+      (should (equal default-directory (file-name-as-directory (expand-file-name "~"))))
+      (should (string-match-p "No such directory" (qss-rtest--send "cd /no/such/dir/qss")))
+      ;; Lisp cd works too, and the sources run there
+      (qss-rtest--send (format "(cd %S)" dir))
+      (should (equal (qss-> (files) (where (= :name "log.txt")) (get name) collect) '("log.txt"))))))
+
+(ert-deftest qss-repl-run-program ()
+  (skip-unless (executable-find "grep"))
+  (qss-rtest--with-tree dir
+    (qss-rtest--with-repl
+      (qss-rtest--send (concat "cd " dir))
+      (let ((out (qss-rtest--send "!grep error log.txt")))
+        (should (string-match-p "\\`\nalpha error one\ngamma error two\n" out)))
+      ;; the output is the last table, one row per line
+      (should (equal (qss-collect qss-last) '((:line "alpha error one") (:line "gamma error two"))))
+      (should (string-match-p "1 row" (qss-rtest--send "(where (like :line \"%two%\"))")))
+      (should (string-match-p "No such file\\|Searching for program\\|no-such-program-qss"
+                              (qss-rtest--send "!no-such-program-qss"))))))
+
+(ert-deftest qss-repl-run-exit-status ()
+  (skip-unless (executable-find "sh"))
+  (qss-rtest--with-repl
+    (let ((out (qss-rtest--send "!sh -c \"echo out; echo err >&2; exit 3\"")))
+      (should (string-match-p "^out$" out))
+      (should (string-match-p "^err$" out))          ; standard error mixed in
+      (should (string-match-p "^\\[exit 3\\]$" out)))))
+
+(ert-deftest qss-run-source ()
+  (skip-unless (executable-find "sh"))
+  (should (equal (qss-> (run "sh" "-c" "printf 'b\\na\\nc\\n'") (sort-by line) (get line) collect)
+                 '("a" "b" "c")))
+  (should (string-match-p "\\[exit 2\\]\\'" (qss-table-title (qss-run "sh" "-c" "exit 2")))))
+
+(ert-deftest qss-repl-ret-enters-directory ()
+  (qss-rtest--with-tree dir
+    (qss-rtest--with-repl
+      (qss-rtest--send (concat "cd " dir))
+      (qss-rtest--send "(files) (where (= :type \"dir\")) (sort-by name)")
+      (goto-char (point-max))
+      (re-search-backward "^sub dir")
+      (qss--default (qss-current-row))
+      (should (equal default-directory (expand-file-name "sub dir/" dir)))
+      (should (string-match-p (concat "qss> cd " (regexp-quote (abbreviate-file-name (expand-file-name "sub dir" dir))))
+                              (buffer-string)))
+      (should (string-match-p "0 rows .*files .*sub dir/" (buffer-string))))))
+
+(ert-deftest qss-repl-file-completion ()
+  (qss-rtest--with-tree dir
+    (qss-rtest--with-repl
+      (qss-rtest--send (concat "cd " dir))
+      (dolist (case '(("cd s" "sub dir/" "src/") ("!cat l" "log.txt") ("(files \"s" "sub dir/" "src/")))
+        (goto-char (point-max))
+        (let ((inhibit-read-only t)) (delete-region qss-repl--input-start (point-max)))
+        (insert (car case))
+        (let* ((c (qss-repl-completion-at-point))
+               (found (all-completions (buffer-substring-no-properties (nth 0 c) (nth 1 c)) (nth 2 c))))
+          (should (equal (sort found #'string<) (sort (copy-sequence (cdr case)) #'string<))))))))
+
 (provide 'qss-repl-test)
 ;;; qss-repl-test.el ends here

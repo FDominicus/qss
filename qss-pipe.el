@@ -567,7 +567,7 @@ One row per value with the count; RET on a group shows its rows.")
 ;;; qss->: chaining the words
 
 (defvar qss-sources
-  '((files . qss-files) (processes . qss-processes))
+  '((files . qss-files) (processes . qss-processes) (run . qss-run))
   "Sources that may start a `qss->' pipe without the qss- prefix.")
 
 (defvar qss--words
