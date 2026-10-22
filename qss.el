@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.4.0
+;; Version: 0.6.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -44,13 +44,16 @@
 ;;
 ;; M-x qss opens a REPL where the tables appear right below the input.
 ;; It is a shell as well: !PROGRAM ARGS runs a program without a shell,
-;; cd changes the directory.
+;; cd changes the directory.  A line that starts with | goes on with
+;; the last table.
 ;;
 ;; The package has these parts, each in its own file:
 ;;   qss-table.el     tables, display, sources `files', `processes', `run'
 ;;   qss-pipe.el      the words and `qss->', `qss-eval'
 ;;   qss-sql.el       SQLite as a source; the words become SQL
-;;   qss-nu.el        Nushell as a source: (nu "ps | where cpu > 5")
+;;   qss-nu.el        Nushell as a source: (nu "ps | where cpu > 5"),
+;;                    and as a word: (files) (nu "where size > 10kb")
+;;   qss-nuon.el      reads and writes NUON, Nushell's format with types
 ;;   qss-repl.el      M-x qss, the REPL
 ;;   qss-examples.el  M-x qss-examples
 

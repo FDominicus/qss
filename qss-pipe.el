@@ -57,7 +57,7 @@
 (cl-defgeneric qss-as-table (value)
   "Return VALUE as a table with its rows in memory.
 A table stays a table, a list becomes the rows.  Other sources (such
-as a query in qss-sql) fetch their rows here."
+as a query in qss-sql.el) fetch their rows here."
   (error "Not a table: %S" value))
 
 (cl-defmethod qss-as-table ((value qss-table))
@@ -134,6 +134,9 @@ The time is local time."
   "Return -1, 0 or 1 comparing A with B; nil if A or B is missing (NULL)."
   (cond ((or (null a) (null b)) nil)
         ((and (numberp a) (numberp b)) (cond ((< a b) -1) ((> a b) 1) (t 0)))
+        ;; sizes and durations as Nushell writes them: (> :size "10kb")
+        ((and (numberp a) (qss-parse-quantity b)) (qss--compare a (cdr (qss-parse-quantity b))))
+        ((and (numberp b) (qss-parse-quantity a)) (qss--compare (cdr (qss-parse-quantity a)) b))
         ((and (stringp a) (stringp b)) (cond ((string< a b) -1) ((string= a b) 0) (t 1)))
         ((or (qss--time-p a) (qss--time-p b))
          (let ((a (if (stringp a) (qss--to-time a) a))
@@ -580,7 +583,13 @@ One row per value with the count; RET on a group shows its rows.")
   "Words of `qss->' and how their arguments are read.")
 
 (defun qss--word-function (word)
-  "Return the function that implements WORD."
+  "Return the function that implements WORD.
+A word may name its function in its `qss-word-function' property."
+  (or (get word 'qss-word-function)
+      (qss--word-function-1 word)))
+
+(defun qss--word-function-1 (word)
+  "Return the function of WORD by the naming rule: qss-WORD."
   (pcase word
     ('columns 'qss-columns-of)
     ('filter 'qss-where)

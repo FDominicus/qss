@@ -87,12 +87,51 @@ qss> (nu "sys disks")
 qss> (nu "ls **/*.el") (sort-by size :desc) (first 10)
 ```
 
-`(nu COMMAND)` runs `nu -c "(COMMAND) | to json --raw"` in
+`(nu COMMAND)` runs `nu -c "(COMMAND) | to nuon"` in
 `default-directory` (on the remote host in a TRAMP buffer) and reads
-the JSON: a list of records becomes the rows, a single record rows of
+the result: a list of records becomes the rows, a single record rows of
 `column` and `value`. `RET` on a row from `ls` opens the file.
 `qss-nu-program` names the program, `qss-nu-arguments` its arguments
 (by default your config files are not loaded).
+
+NUON is Nushell's own format. Unlike JSON it keeps the types: sizes
+(`10kb`), durations (`3hr`) and datetimes become columns of the types
+`size`, `duration` and `time`, shown as `9.8k`, `3hr 20min` and
+`2026-10-22 14:40`, sorted and compared as numbers and times. qss reads
+NUON with its own reader (qss-nuon.el; `qss-nuon-read` and
+`qss-nuon-encode` can be used on their own). If a Nushell writes NUON
+that qss cannot read, set `qss-nu-format` to `json`; then sizes are only
+recognized by the column name (`qss-nu-size-columns`) and durations are
+plain numbers of nanoseconds.
+
+In the middle of a pipe, `nu` works the other way round too: the table
+so far goes to Nushell as `$in`, and what comes back is a table again.
+
+```
+qss> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
+       (nu "to csv | save -f open-orders.csv")
+qss> (files) (nu "where size > 10kb | get size | math sum")
+qss> (files) (where (> :size 1000)) (nu "sort-by modified -r") (first 5)
+```
+
+The rows go over as NUON with their types: time columns arrive as
+datetimes, size columns as file sizes and duration columns as
+durations, so `where size > 10kb` and `where modified > 2026-01-01`
+work. A single value (like a sum) comes
+back as it is; nothing (like from `save`) comes back as `nil`.
+`g` in the table buffer runs the whole pipe again.
+
+In the REPL a line that starts with `|` goes on with the last table:
+
+```
+qss> (files "~/Downloads")
+qss> | (nu "where size > 100mb")
+qss> | (sort-by size :desc)
+```
+
+A line that starts with a word like `(where ...)` does that as well; a
+line that starts with a source like `(nu "...")` or `(files)` starts a
+new table.
 
 ## Words
 
@@ -124,7 +163,9 @@ Columns are keywords; everything else is Lisp, variables included:
 ```
 
 Comparisons mean what they mean in SQL: `=`, `<` … work on numbers,
-strings and times (`(> :modified "2026-10-20")` works), `like` ignores
+strings and times (`(> :modified "2026-10-20")` works), sizes and
+durations can be written as in Nushell (`(> :size "10kb")`,
+`(< :took "1hr")`), `like` ignores
 case, and a missing value is NULL — comparing with it is unknown, so the
 same condition returns the same rows in memory and in SQLite.
 
@@ -189,6 +230,9 @@ A row type is a few methods:
 (cl-defmethod qss-default-action ((x my-thing)) ...)   ; RET
 (cl-defmethod qss-actions ((x my-thing)) (list (cons "Do it" #'my-do-it)))  ; a
 ```
+
+Column types are `number`, `size` (bytes), `duration` (nanoseconds) and
+`time` (a Lisp time); they decide alignment, display and sorting.
 
 ## Examples
 

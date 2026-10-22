@@ -81,7 +81,7 @@ A list; each element is a symbol (the field name) or (NAME . PLIST)
 with the keys
   :format  function from the raw value to the displayed text
   :align   `left' or `right'
-  :type    `number', `size' or `time' (sorting and defaults)
+  :type    `number', `size', `duration' or `time' (sorting and defaults)
   :width   width in characters.
 The column header is the field name; the same name goes to `qss-field'.")
 
@@ -145,11 +145,12 @@ Only missing keys are added, so a spec can pass through here again."
          (type (plist-get plist :type)))
     (unless (plist-member plist :align)
       (setq plist (plist-put plist :align
-                             (if (memq type '(number size)) 'right 'left))))
+                             (if (memq type '(number size duration)) 'right 'left))))
     (unless (plist-member plist :format)
       (setq plist (plist-put plist :format
                              (pcase type
                                ('size #'qss-format-size)
+                               ('duration #'qss-format-duration)
                                ('time #'qss-format-time)
                                (_ #'qss-format-value)))))
     (cons (car spec) plist)))
@@ -177,13 +178,63 @@ Only missing keys are added, so a spec can pass through here again."
   "Return TIME (a Lisp time or seconds) as 2026-10-22 07:11."
   (if time (format-time-string "%Y-%m-%d %H:%M" time) ""))
 
+(defconst qss-duration-units
+  '(("ns" . 1) ("us" . 1000) ("\u00b5s" . 1000) ("ms" . 1000000)
+    ("sec" . 1000000000) ("min" . 60000000000) ("hr" . 3600000000000)
+    ("day" . 86400000000000) ("wk" . 604800000000000))
+  "Duration units of Nushell and their length in nanoseconds.")
+
+(defconst qss-size-units
+  '(("b" . 1)
+    ("kb" . 1000) ("mb" . 1000000) ("gb" . 1000000000) ("tb" . 1000000000000)
+    ("pb" . 1000000000000000) ("eb" . 1000000000000000000)
+    ("kib" . 1024) ("mib" . 1048576) ("gib" . 1073741824) ("tib" . 1099511627776)
+    ("pib" . 1125899906842624) ("eib" . 1152921504606846976))
+  "Size units of Nushell and their size in bytes.  Case does not matter.")
+
+(defun qss-parse-quantity (text)
+  "Return the size or duration TEXT as (TYPE . NUMBER), or nil.
+TYPE is `size' (NUMBER in bytes) or `duration' (in nanoseconds):
+\"10kb\" -> (size . 10000), \"3hr\" -> (duration . 10800000000000)."
+  (when (and (stringp text)
+             (string-match "\\`\\(-?[0-9]*\\.?[0-9]+\\(?:[eE][-+]?[0-9]+\\)?\\)\\([a-zA-Z\u00b5]+\\)\\'"
+                           text))
+    (let* ((n (string-to-number (match-string 1 text)))
+           (unit (match-string 2 text))
+           (dur (assoc unit qss-duration-units))
+           (size (assoc (downcase unit) qss-size-units)))
+      (cond (dur (cons 'duration (round (* n (cdr dur)))))
+            (size (cons 'size (round (* n (cdr size)))))))))
+
+(defun qss-format-duration (ns)
+  "Return the duration NS (nanoseconds) in short form: 3hr 20min, 1sec 500ms.
+The largest unit and the one below it are shown, if not zero."
+  (cond ((null ns) "")
+        ((not (numberp ns)) (qss-format-value ns))
+        ((zerop ns) "0sec")
+        (t
+         (let* ((units '(("wk" . 604800000000000) ("day" . 86400000000000)
+                         ("hr" . 3600000000000) ("min" . 60000000000)
+                         ("sec" . 1000000000) ("ms" . 1000000)
+                         ("\u00b5s" . 1000) ("ns" . 1)))
+                (n (abs (round ns)))
+                (tail (cl-member-if (lambda (u) (>= n (cdr u))) units))
+                (first (car tail))
+                (next (cadr tail))
+                (rest (% n (cdr first))))
+           (concat (if (< ns 0) "-" "")
+                   (format "%d%s" (/ n (cdr first)) (car first))
+                   (if (and next (>= rest (cdr next)))
+                       (format " %d%s" (/ rest (cdr next)) (car next))
+                     ""))))))
+
 (defun qss--sort-value (row spec)
   "Return the sort value of ROW in column SPEC, for vtable.
 Numbers stay numbers, times become seconds, the rest is text."
   (let ((v (qss-field row (car spec)))
         (type (plist-get (cdr spec) :type)))
     (pcase type
-      ((or 'number 'size) (if (numberp v) v 0))
+      ((or 'number 'size 'duration) (if (numberp v) v 0))
       ('time (if v (float-time v) 0))
       (_ (qss-format-value v)))))
 
@@ -272,7 +323,7 @@ every text in full (command lines with tens of thousands of characters)."
             (let* ((type (plist-get (cdr spec) :type))
                    (fmt (plist-get (cdr spec) :format))
                    (width (qss--column-width table spec))
-                   (numeric (memq type '(number size time))))
+                   (numeric (memq type '(number size duration time))))
               (list :name (symbol-name (car spec))
                     :align (plist-get (cdr spec) :align)
                     :width width
@@ -284,7 +335,7 @@ every text in full (command lines with tens of thousands of characters)."
                     :formatter (pcase type
                                  ('time (lambda (secs)
                                           (if (zerop secs) "" (funcall fmt secs))))
-                                 ((or 'number 'size) fmt)
+                                 ((or 'number 'size 'duration) fmt)
                                  (_ #'identity)))))
           (qss-table-columns table)))
 

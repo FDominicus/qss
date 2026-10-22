@@ -70,6 +70,9 @@
             (first 5)
             (select name size modified)))
 
+    ("Files: sizes written as in Nushell"
+     (qss-> (files user-emacs-directory) (where (> :size "4kb")) (select name size)))
+
     ("Files: changed in the last seven days; RET still opens the file"
      (let ((since (time-subtract nil (days-to-time 7))))
        (qss-> (files user-emacs-directory)
@@ -185,7 +188,31 @@
      (let ((csv (expand-file-name "qss-example.csv" temporary-file-directory)))
        (with-temp-file csv (insert "item,amount\nnails,12.5\nscrews,99\nglue,4\n"))
        (qss-> (nu (format "open %s" csv)) (where (> :amount 10)) (sort-by amount :desc)))
-     (executable-find qss-nu-program)))
+     (executable-find qss-nu-program))
+
+    ("Nushell: durations stay durations (needs nu)"
+     (qss-> (nu "[{task: build, took: 3min} {task: test, took: 95sec} {task: lint, took: 800ms}]")
+            (where (> :took "1sec"))
+            (sort-by took :desc))
+     (executable-find qss-nu-program))
+
+    ("Nushell in the middle of a pipe: a qss table goes in, a table comes out (needs nu)"
+     ;; size and modified arrive in Nushell as file size and datetime
+     (qss-> (files user-emacs-directory)
+            (where (= :type "file"))
+            (nu "sort-by modified -r | first 5 | select name size modified"))
+     (executable-find qss-nu-program))
+
+    ("Nushell in the middle of a pipe: a single value comes back as it is (needs nu)"
+     (qss-> (files user-emacs-directory) (nu "get size | math sum"))
+     (executable-find qss-nu-program))
+
+    ("Nushell in the middle of a pipe: SQLite rows saved as CSV (needs nu)"
+     (let ((csv (expand-file-name "qss-open-orders.csv" temporary-file-directory)))
+       (qss-> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
+              (nu (format "to csv | save -f %s" csv)))
+       (qss-> (nu (format "open %s" csv))))
+     (and (executable-find qss-nu-program) (sqlite-available-p))))
 
   "Examples of qss: a list of (TITLE FORM [CONDITION]).
 FORM is evaluated with lexical binding; see `qss-examples'.  If

@@ -30,7 +30,9 @@
 ;;   - Several forms, or one form starting with a source (files,
 ;;     processes, sqlite, tables, nu, run), are a pipe as in `qss->'.
 ;;   - A form starting with a word (where, select, sort-by ...)
-;;     continues the last table, like $in in Nushell.
+;;     continues the last table, like $in in Nushell.  A line starting
+;;     with | always continues it, also into Nushell:
+;;       | (nu "math sum")      | (nu "to csv | save -f out.csv")
 ;;   - Anything else is ordinary Lisp; wrap it in (progn ...) if it
 ;;     looks like a word, e.g. Lisp's own `last' or `get'.
 ;;   - The last table is also in the variable `qss-last', for Lisp.
@@ -239,8 +241,9 @@ number of all rows."
 See the commentary of qss-repl.el for how the input is understood."
   (cond
    ((null forms) nil)
-   ;; continue the last table
+   ;; continue the last table (a source such as nu starts a new pipe)
    ((and (qss-repl--word-p (car forms))
+         (not (and (consp (car forms)) (qss-repl--source-p (car forms))))
          (or (qss-table-p qss-last) (qss-relation-p qss-last)))
     (eval `(qss-> qss-last ,@forms) t))
    ;; a pipe
@@ -310,7 +313,8 @@ character.  ; | > & * have no special meaning: there is no shell."
     (setq default-directory full)))
 
 (defun qss-repl--run-line (input)
-  "Run the shell line INPUT; insert its output and return the value for `qss-last'."
+  "Run the shell line INPUT; insert its output.
+Return the value for the variable `qss-last'."
   (if (string-match qss-repl--cd-regexp input)
       (progn (qss-repl-cd (match-string 1 input)) nil)
     (let* ((words (mapcar #'qss-repl--expand-arg
@@ -325,6 +329,15 @@ character.  ; | > & * have no special meaning: there is no shell."
                               'face 'qss-repl-error)
                   "\n"))
         table))))
+
+(defun qss-repl--evaluate-input (input)
+  "Evaluate the Lisp INPUT; a leading | continues the last table."
+  (if (string-match "\\`[ \t\n]*|" input)
+      (progn
+        (unless (or (qss-table-p qss-last) (qss-relation-p qss-last))
+          (user-error "No table to continue: | needs a table above"))
+        (eval `(qss-> qss-last ,@(qss-repl--read-forms (substring input (match-end 0)))) t))
+    (qss-repl-evaluate (qss-repl--read-forms input))))
 
 (defun qss-repl-send ()
   "Evaluate the input, or insert a newline while it is incomplete.
@@ -346,7 +359,7 @@ On output text, move to the end of the input."
               (if shell
                   (let ((value (qss-repl--run-line input)))
                     (when value (setq qss-last value)))
-                (let ((value (qss-repl-evaluate (qss-repl--read-forms input))))
+                (let ((value (qss-repl--evaluate-input input)))
                   (when (or (qss-table-p value) (qss-relation-p value))
                     (setq qss-last value))
                   (unless (string-blank-p input)
@@ -417,7 +430,7 @@ A directory row from `files', or a row with :type \"dir\" from Nushell."
     (insert input)))
 
 (defun qss-repl--column-names ()
-  "Return the column names of `qss-last', as symbols."
+  "Return the column names of the variable `qss-last', as symbols."
   (cond ((qss-table-p qss-last) (mapcar #'car (qss-table-columns qss-last)))
         ((qss-relation-p qss-last) (mapcar #'car (qss-relation-columns qss-last)))))
 
