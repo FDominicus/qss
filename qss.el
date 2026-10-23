@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.8.0
+;; Version: 0.10.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -42,8 +42,11 @@
 ;; On SQLite the words become SQL with `?' parameters until the rows
 ;; are needed.
 ;;
-;; Only parts built into Emacs 29 are used: vtable, sqlite and
-;; cl-generic.
+;; Only parts built into Emacs 29 are used: vtable, sqlite,
+;; cl-generic and nadvice.
+;;
+;; The public interface is checked by contracts (qss-interface.el);
+;; README.md says where the ideas come from.
 ;;
 ;; M-x qss opens a REPL where the tables appear right below the input.
 ;; It is a shell as well: !PROGRAM ARGS runs a program without a shell,
@@ -58,7 +61,11 @@
 ;;   qss-nu.el        Nushell as a source: (nu "ps | where cpu > 5"),
 ;;                    and as a word: (files) (nu "where size > 10kb")
 ;;   qss-nuon.el      reads and writes NUON, Nushell's format with types
+;;   qss-present.el   presentations and accept (after CLIM): typed
+;;                    objects, highlighted choices, typed commands
 ;;   qss-menu.el      actions at point: a, the right mouse button, w
+;;   qss-contract.el  contracts with blame, after Racket (stands alone)
+;;   qss-interface.el the public interface of qss with its contracts
 ;;   qss-repl.el      M-x qss, the REPL
 ;;   qss-examples.el  M-x qss-examples
 
@@ -67,9 +74,12 @@
 (require 'qss-table)
 (require 'qss-pipe)
 (require 'qss-sql)
+(require 'qss-present)
 (require 'qss-menu)
 (require 'qss-repl)
 (require 'qss-nu)
+;; Last: the contracts of the interface, on everything above.
+(require 'qss-interface)
 
 ;;; Tests
 

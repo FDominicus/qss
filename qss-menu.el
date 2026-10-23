@@ -16,6 +16,9 @@
 ;;   - words with the value at point:  (where (= :status "paid")),
 ;;     (where (is-null :city)), (sort-by amount :desc), (group-by user),
 ;;     (select name), (reject mode), copy the value;
+;;   - commands with typed arguments (`qss-define-command') whose first
+;;     argument fits the row or the value: "Compare with file...", the
+;;     other arguments are accepted, e.g. by a click on another row;
 ;;   - the whole table: copy it as text, Org, Markdown, CSV or TSV.
 ;;
 ;; A word continues the whole table, not only the rows shown: on SQLite
@@ -29,7 +32,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'qss-pipe)
+(require 'qss-present)
 
 (defcustom qss-copy-format 'text
   "Format in which \\`w' copies a table; see `qss-to'."
@@ -113,7 +116,8 @@ Conditions on the value first, then the words on the column."
 (defun qss-actions-at-point ()
   "Return the actions at point as a list of groups.
 Each group is a list of (LABEL . FUNCTION); FUNCTION takes no
-arguments.  The groups: the row object, the value at point, the table."
+arguments.  The groups: the row object, the value at point, the
+commands for the row or the value (`qss-commands-for'), the table."
   (let* ((whole (qss--whole-at-point))
          (row (vtable-current-object))
          (name (and row (qss--column-at-point)))
@@ -135,6 +139,10 @@ arguments.  The groups: the row object, the value at point, the table."
                                (let ((text (qss--plain-value value spec)))
                                  (kill-new text)
                                  (message "Copied: %s" text)))))))
+           (let ((row-type (and row (qss-presentation-type row)))
+                 (cell-type (and name (qss--cell-type spec value))))
+             (append (and row-type (not (eq row-type t)) (qss-commands-for row row-type))
+                     (and cell-type (not (eq cell-type t)) (qss-commands-for value cell-type))))
            (mapcar (lambda (format)
                      (cons (format "Copy table as %s" format)
                            (lambda () (qss-copy-table-as whole format))))

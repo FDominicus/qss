@@ -51,6 +51,11 @@
 ;; M-p / M-n history, TAB completion of words, sources and the column
 ;; names of the last table, and of file names after ! and cd and inside
 ;; strings; C-c M-o clear the buffer.
+;;
+;; While typing, C-c C-v takes a value from a table above into the
+;; input: the cells are highlighted, a click on one inserts it (3,
+;; "Anna Meier", "2026-10-22 07:11:05").  C-c C-f does the same with
+;; the name of a file row.  See qss-present.el.
 
 ;;; Code:
 
@@ -58,6 +63,7 @@
 (require 'pp)
 (require 'qss-sql)
 (require 'qss-menu)
+(require 'qss-present)
 
 (defcustom qss-repl-max-rows 30
   "Maximum number of rows a table shows inside the qss REPL."
@@ -108,7 +114,8 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
    ";;   cd ~/src                    changes the directory\n"
    ";; A line starting with | or a word, e.g. (where ...), continues the last table.\n"
    ";; RET/a/w/S or the right mouse button on a table row; M-p/M-n history;\n"
-   ";; TAB completes; M-x qss-examples.\n"))
+   ";; TAB completes; C-c C-v / C-c C-f take a value / file name from a table.\n"
+   ";; M-x qss-examples.\n"))
 
 ;;; ------------------------------------------------------------------
 ;;; Mode
@@ -120,6 +127,8 @@ See `qss-repl-previous-input' and `qss-repl-next-input'.")
     (define-key m (kbd "M-n") #'qss-repl-next-input)
     (define-key m (kbd "TAB") #'completion-at-point)
     (define-key m (kbd "C-c M-o") #'qss-repl-clear)
+    (define-key m (kbd "C-c C-v") #'qss-repl-insert-value)
+    (define-key m (kbd "C-c C-f") #'qss-repl-insert-file-name)
     m)
   "Keymap of `qss-repl-mode'.")
 
@@ -214,7 +223,16 @@ number of all rows."
   "Insert VALUE as the result of an input."
   (cond ((or (qss-table-p value) (qss-relation-p value))
          (qss-repl--insert-table value))
+        ;; One-line values are presentations, so `qss-accept' can offer
+        ;; them later (C-c C-v).
+        ((and (stringp value) (not (string-search "\n" value)))
+         (qss-present value 'string value)
+         (insert "\n"))
         ((stringp value) (insert value (if (string-suffix-p "\n" value) "" "\n")))
+        ((or (numberp value) (qss--time-p value))
+         (qss-present value nil (if (numberp value) (number-to-string value)
+                                  (format-time-string qss-time-format value)))
+         (insert "\n"))
         (t (let ((print-length 50) (print-level 6))
              (insert (pp-to-string value))))))
 
@@ -371,8 +389,15 @@ On output text, move to the end of the input."
                   (unless (string-blank-p input)
                     (qss-repl--print value))))
             (error
-             (insert (propertize (error-message-string err) 'face 'qss-repl-error) "\n"))))
+             (insert (propertize (qss-repl--error-text err) 'face 'qss-repl-error) "\n"))))
         (qss-repl--prompt)))))
+
+(defun qss-repl--error-text (err)
+  "Return the message of the error ERR, as the REPL shows it.
+A contract violation without the quotes Emacs puts around its text."
+  (if (and (eq (car err) 'qss-contract-violation) (stringp (cadr err)))
+      (concat "Contract violation: " (cadr err))
+    (error-message-string err)))
 
 (defun qss-repl-submit (input)
   "Put INPUT at the prompt and send it, as if typed."
@@ -408,6 +433,35 @@ whose row was clicked, even if it is not the newest one."
     (setq qss-last table)
     (qss-repl-submit (prin1-to-string stage))
     (insert pending)))
+
+;;; Accepting into the input: a value or a file name by a click
+
+(defun qss-repl--literal (object)
+  "Return OBJECT as text to type in a pipe: a string, a number, a time."
+  (cond ((numberp object) (number-to-string object))
+        ((stringp object) (prin1-to-string object))
+        ((qss--time-p object) (prin1-to-string (format-time-string qss-time-format object)))
+        ((and object (symbolp object)) (concat "'" (symbol-name object)))
+        (t (prin1-to-string (qss-presentation-label object)))))
+
+(defun qss-repl--insert-input (text)
+  "Insert TEXT at point if point is in the input, else at its end."
+  (when (< (point) qss-repl--input-start) (goto-char (point-max)))
+  (insert text))
+
+(defun qss-repl-insert-value ()
+  "Insert a value shown in a table here, chosen by a click, into the input.
+All visible cells are highlighted (see `qss-accept'); a number goes in
+as a number, a text as a string, a time as \"2026-10-22 07:11:05\"."
+  (interactive)
+  (qss-repl--insert-input (qss-repl--literal (qss-accept 'value "Insert value: "))))
+
+(defun qss-repl-insert-file-name ()
+  "Insert the name of a file shown here, chosen by a click, into the input.
+All visible file rows are highlighted; a file name can be typed too."
+  (interactive)
+  (qss-repl--insert-input
+   (prin1-to-string (abbreviate-file-name (qss-file-name (qss-accept 'file "Insert file name: "))))))
 
 ;;; ------------------------------------------------------------------
 ;;; History, clearing, completion

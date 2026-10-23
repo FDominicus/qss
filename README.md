@@ -5,6 +5,13 @@ as tables, and one small vocabulary that works on all of them — files,
 processes, property lists, rows of an SQLite table, and whatever Nushell
 itself produces.
 
+Around it are a few more old ideas, each with its own section: the
+words become SQL as in dbplyr; SQLite is source and store; what is
+shown stays the object it shows and can be pointed at, as in CLIM
+(*presentations* and *accept*); and the interface is checked by
+contracts with blame, as in Racket. [Where the ideas come
+from](#where-the-ideas-come-from) says more.
+
 ```
 M-x qss
 qss> (files "~") (where (> :size 100000)) (sort-by size :desc) (first 5)
@@ -35,6 +42,8 @@ qss> | (sort-by size :desc)
 | `a`, right mouse button | on a table row: the actions of the row, words with the value at point, copying the table |
 | `w` | on a table row: copy the whole table as text (`C-u w` asks for the format) |
 | `S` | on a table row: sort by the column at point |
+| `C-c C-v` | while typing: take a value from a table into the input, by a click |
+| `C-c C-f` | while typing: take the name of a file row into the input |
 | `M-p` / `M-n` | previous / next input |
 | `TAB` | complete words, sources, column names and file names |
 | `C-c M-o` | clear the buffer |
@@ -66,6 +75,11 @@ result opens in a buffer of its own.
 `M-x qss-eval` does the same from the minibuffer, with the result in a
 table buffer.
 
+What is shown in the REPL stays the object it shows, and can be
+pointed at later: `C-c C-v` while typing highlights the cells above, and
+a click puts the value into the input. See
+[Presentations and accept](#presentations-and-accept).
+
 ### The REPL as a shell
 
 ```
@@ -89,8 +103,8 @@ table buffer.
 - `TAB` completes file names after `!` and `cd` and inside strings.
 - `(run PROGRAM ARGS...)` is the same as a source for pipes.
 
-Only what is built into Emacs 29 is used: `vtable`, `sqlite` and
-`cl-generic`. No other packages.
+Only what is built into Emacs 29 is used: `vtable`, `sqlite`,
+`cl-generic` and advice. No other packages.
 
 ## Install
 
@@ -289,6 +303,182 @@ Column and table names become keys mechanically: `OrderDate` →
 `order-date`, `HT_Orders` → `ht-orders`, `Straße` → `strasse`.
 Display fetches at most `qss-sql-display-limit` rows (1000).
 
+## Presentations and accept
+
+The idea comes from CLIM, the Common Lisp Interface Manager (and
+before it Dynamic Windows on the Lisp machines): output remembers what
+it shows, so it can be used as input later. In a CLIM listener you type
+a command, and where it wants a file you click a file that some earlier
+output printed — the program gets the file object, not its name as
+text.
+
+qss does the same in Emacs buffers. A buffer is the store: whatever
+qss (or your own code) has shown in a buffer that is visible can be
+chosen.
+
+### What a presentation is
+
+A *presentation* is a piece of text in a buffer together with an object
+and a *presentation type*:
+
+- every **row** of a table is a presentation of its row object: a file
+  row of a `qss-file` (type `file` or `directory`), a process row of a
+  process, a row of `tables` of a `db-table`, a row of data of a `row`
+  — or of a `file`, if it has a `path` (a file row stored with `into`);
+- every **cell** is a presentation of its value: `size`, `duration` and
+  `time` from the type of the column, otherwise from the value itself
+  (`integer`, `number`, `string`, `time`, `symbol`); empty cells (NULL)
+  are none;
+- what the **REPL prints** — a number, a line of text, a time — is one
+  too;
+- **any text** in any buffer, made with `qss-present`:
+
+```elisp
+;; A buffer of notes with some files in it.  Every file name is a
+;; presentation of that file, as good as a file row in a table.
+(with-current-buffer (get-buffer-create "*to read*")
+  (erase-buffer)
+  (insert "Files to look at:\n")
+  (dolist (f (directory-files "~/notes" t "\\.org\\'"))
+    (insert "  ")
+    (qss-present (list :path f) 'file (file-name-nondirectory f))
+    (insert "\n"))
+  (display-buffer (current-buffer)))
+```
+
+The text stays plain text; the object rides along in the text property
+`qss-presentation`.
+
+### What accept does
+
+`(qss-accept TYPE PROMPT)` asks for an object of TYPE:
+
+1. It looks at **every visible window** (not at hidden buffers: what you
+   see is what you can choose) and collects the presentations of TYPE —
+   of TYPE itself or any type below it.
+2. It **highlights** them. The prompt says how many there are:
+   `with file: (3 shown, click one or type)`.
+3. You answer in one of three ways:
+   - **click** one (or move point onto it in its window and press
+     `RET`): the answer is the object itself — the `qss-file`, the
+     process, the number 3;
+   - **type** its label, with completion over the highlighted ones (a
+     file by its path, a process by PID and command ...);
+   - **type** something new: the text is parsed for the type — a path
+     for `file`, `"10kb"` for `size`, `"3hr"` for `duration`,
+     `"2026-10-22"` for `time`, a PID for `process`.
+4. `C-g` gives up; the highlighting is gone either way.
+
+A row whose object fits the type is offered as a whole row; otherwise
+its cells are looked at. So `file` offers file rows, `value` the cells.
+
+### Types
+
+```
+t ─┬─ object ─┬─ file ─ directory
+   │          ├─ process, db-table, row
+   └─ value ──┬─ number ─ integer ─┬─ size
+              │                    └─ duration
+              └─ string, time, symbol
+```
+
+A directory is a file too, a size a number: accepting `file` offers
+directories as well, accepting `directory` only directories. Every type
+can parse typed text, or take it from the nearest type above that can
+(`qss-presentation-parse`).
+
+### Examples
+
+**A value into the input.** In the REPL, while typing, `C-c C-v`
+accepts a `value`:
+
+```
+qss> (sqlite (qss-demo-database) "Orders")
+6 rows  ...
+    4714           3 2026-10-02   45.0 paid
+qss> (where (= :customer-no ▮          C-c C-v, all cells light up,
+                                      click the 3
+qss> (where (= :customer-no 3▮
+```
+
+A number goes in as a number, text as a string, a time as
+`"2026-10-22 07:11:05"`. `C-c C-f` accepts a `file` and inserts its
+name: `!wc -l ` `C-c C-f`, click a file row.
+
+**Two files from two places.** Show two directories, each in a buffer
+of its own (`[buffer]` after the table), side by side:
+
+```
+qss> (files "~/project/v1")      [buffer]
+qss> (files "~/project/v2")      [buffer]
+```
+
+On `main.el` in the left window, `a` → *Compare with file...*: the left
+row is the first file; every file row in both windows lights up; a click
+on `main.el` on the right, and `diff` shows the differences.
+
+**Only what fits.** On a file, *Copy into directory...* lights up only
+the directories — rows of type `directory` — in every visible window,
+the notes buffer above included if it presents some.
+
+**A value as the start.** On a size cell, `a` offers *Files larger than
+this, here*: the size is the argument, and the files of the current
+directory larger than it come up.
+
+**From Lisp.** Any code can ask:
+
+```elisp
+(let ((dir (qss-accept 'directory "Back up into: ")))
+  (copy-directory "~/notes" (qss-file-name dir)))
+```
+
+### Commands with typed arguments
+
+`qss-define-command` defines a command whose arguments are accepted by
+type, after `define-command` in CLIM:
+
+```elisp
+(qss-define-command my-open-both "Open side by side"
+    ((a file "Open: ") (b file "next to: "))
+  "Show the files A and B side by side."
+  (find-file (qss-file-name a))
+  (find-file-other-window (qss-file-name b)))
+```
+
+- `M-x my-open-both` accepts both files, each by a click or by typing.
+- On every presentation of the type of the first argument — every file
+  row, every presented file in any buffer — `a` and the right mouse
+  button offer *Open side by side...*; that presentation is the first
+  argument, the others are accepted.
+- `qss-file-name` turns what was chosen (a file row, a stored row, a
+  typed path) into the file name.
+
+qss brings three: *Compare with file* (`qss-compare-files`), *Copy into
+directory* (`qss-copy-file-into`) and *Files larger than this, here*
+(`qss-files-larger-than`).
+
+### Own types
+
+```elisp
+(qss-define-presentation-type 'invoice 'object
+  (lambda (text) (my-invoice-by-number text))   ; typed text -> invoice
+  "An invoice.")
+(cl-defmethod qss-presentation-type ((_ my-invoice)) 'invoice)
+(cl-defmethod qss-presentation-label ((x my-invoice)) (my-invoice-number x))
+```
+
+Rows of `my-invoice` are then invoices for `qss-accept` and for
+commands with an argument of type `invoice`.
+
+### Compared with CLIM
+
+qss takes the core — presentations with types, accept with
+highlighting, commands with typed arguments offered on the objects —
+and leaves out much: there are no presentation translators besides the
+first argument of a command, no parsing of whole command lines in an
+input editor, no presentation views, and only visible windows are
+searched. What it adds is that every buffer can take part.
+
 ## In Lisp
 
 ```elisp
@@ -320,10 +510,95 @@ A row type is a few methods:
 (cl-defmethod qss-default-action ((x my-thing)) ...)   ; RET
 (cl-defmethod qss-actions ((x my-thing)) (list (cons "Do it" #'my-do-it)))  ; a
 (cl-defmethod qss-stored-fields ((x my-thing)) '(id))                         ; into
+(qss-define-presentation-type 'my-thing 'object)
+(cl-defmethod qss-presentation-type ((x my-thing)) 'my-thing)                 ; accept
 ```
 
 Column types are `number`, `size` (bytes), `duration` (nanoseconds) and
 `time` (a Lisp time); they decide alignment, display and sorting.
+
+The contracts of the protocol check these methods: a `qss-columns`
+that returns something that is not a list of columns is reported as
+the fault of that method, with its type (see [Contracts](#contracts)).
+
+## Contracts
+
+The public interface of qss is checked by contracts, after Racket: every
+function says what it takes and what it returns, and when that is
+broken, the message says **who** broke it.
+
+```
+qss> (processes) (first -1)
+Contract violation: qss-first: argument 2 must satisfy natnump, got -1
+  blame: the caller (outside the checked functions)
+  contract: (-> qss-tabular (opt natnump) qss-result)
+```
+
+```
+Contract violation: qss-columns: the result must satisfy (listof qss-column-spec),
+got (name 42) (element 1 is 42, not qss-column-spec)
+  blame: qss-columns itself, the method for my-thing
+  contract: (-> any (listof qss-column-spec))
+```
+
+- An argument that breaks the contract is the fault of the **caller**;
+  if that is a checked function itself, it is named
+  (`blame: the caller, qss-continue`).
+- A result that breaks it is the fault of the **function** — for a
+  generic function, of the method for the type of the first argument.
+  This is where own row types are caught: the methods for them must
+  keep the protocol.
+
+The whole interface is in one file, **qss-interface.el**, nearly fifty
+functions, each with its contract — readable as the reference of qss:
+
+```elisp
+(qss-define-contract qss-sqlite  (-> stringp (opt (or/c stringp symbolp)) qss-relation-p))
+(qss-define-contract qss-columns (-> any (listof qss-column-spec)))
+(qss-define-contract qss-accept  (-> qss-presentation-type-name (opt stringp) any))
+```
+
+`C-h f` shows the contract of a function, and the contracts are a source
+like any other:
+
+```
+qss> (contracts) (where (like :function "%sql%"))
+```
+
+The contracts are `:around` advice. They stand beside the code, not in
+it; they hold for every method of a generic function, also methods
+added later, and survive redefinition. They are not put on functions
+that run once per row or per cell (`qss-field`, the formats of values):
+at the boundaries they cost nothing noticeable — a pipe over 20000
+rows is a few percent slower — inside the loops they would.
+`qss-contract-enabled` turns all checks off.
+
+### The language
+
+| Contract | Means |
+|---|---|
+| `stringp`, `natnump`, `qss-table-p` … | a predicate |
+| `any` | anything |
+| `(or/c C ...)`, `(and/c C ...)`, `(not/c C)` | one of, all of, not |
+| `(one-of V ...)` | one of these values |
+| `(listof C)`, `(list/c C ...)`, `(cons/c A D)` | lists and conses |
+| `(lambda (x) ...)` | a predicate written in place |
+| `(-> ARG ... RESULT)` | a function; `(opt C)` an optional argument (nil always allowed), `(rest C)` the rest |
+| `qss-column-spec` … | a contract named with `qss-define-contract-type` |
+
+A function passed as an argument is only checked to be a function, not
+wrapped (Racket does that; qss does not, yet).
+
+### For your own code
+
+The library, **qss-contract.el**, depends on nothing else of qss and can
+be used for any Emacs Lisp:
+
+```elisp
+(require 'qss-contract)
+(qss-define-contract-type 'my-weight '(and/c numberp (lambda (w) (>= w 0))))
+(qss-define-contract my-tare (-> my-weight my-weight my-weight))
+```
 
 ## Examples
 
@@ -352,7 +627,43 @@ emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
 ```
 
 The SQLite tests are skipped when Emacs has no SQLite, the Nushell tests
-when `nu` is not installed.
+when `nu` is not installed. The tests run with the contracts on, so
+every test is a check of the contracts as well — and of the code
+against them.
+
+## Where the ideas come from
+
+Little in qss is new; it puts old ideas together in Emacs.
+
+- **Nushell** — data as tables, not as text; one vocabulary (`where`,
+  `select`, `sort-by`, `get`, `first` …) for every source; the pipe.
+  The names of the words, the units `10kb` and `3hr`, and NUON come
+  from there. <https://www.nushell.sh/>
+- **dbplyr** (R) — a pipe over a database table stays a query and is
+  translated to SQL only when the rows are needed; the same words work
+  in memory and in the database. <https://dbplyr.tidyverse.org/>
+- **SQL** — the meaning of the comparisons: `like`, `in`, and NULL as
+  unknown (three-valued logic), so that a condition returns the same
+  rows in memory and in SQLite.
+- **SQLite** — one file as the store of everything, source and target
+  alike (`sqlite`, `into`).
+- **CLIM** (Common Lisp Interface Manager), and Dynamic Windows of the
+  Symbolics Lisp machines before it — presentations, presentation
+  types, `accept`, commands with typed arguments offered on the
+  objects shown. <https://mcclim.common-lisp.dev/> (McCLIM, a free
+  implementation; [CLIM paper](https://mcclim.common-lisp.dev/static/documents/clim-paper.pdf))
+- **CLOS** — generic functions with methods per type (in Emacs:
+  `cl-generic`): the protocol of row types, so a file stays a file and
+  a process a process, and own types fit in with a few methods.
+- **Racket contracts** — contracts on functions at the boundaries, and
+  blame: the caller or the function. After R. B. Findler and
+  M. Felleisen, [*Contracts for Higher-Order Functions*](https://www.cs.northwestern.edu/~robby/pubs/papers/ho-contracts-techreport.pdf)
+  (ICFP 2002; the link is the technical report).
+  <https://docs.racket-lang.org/guide/contracts.html>
+- **Emacs** itself — `vtable` for the tables, the built-in `sqlite`,
+  advice for the contracts, text properties for the presentations,
+  IELM for the shape of the REPL; and the conviction that the editor is
+  the place to work in.
 
 ## License
 

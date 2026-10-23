@@ -300,7 +300,12 @@
                            "| Grace   |   10 |      |\n")))
     (should (equal (qss-to tab 'csv) "name,size,note\n\"Ada, L.\",2048,a|b\nGrace,10,\n"))
     (should (equal (qss-to tab "tsv") "name\tsize\tnote\nAda, L.\t2048\ta|b\nGrace\t10\t\n"))
-    (should-error (qss-to tab 'xml) :type 'user-error)))
+    ;; the contract stops an unknown format at the boundary ...
+    (when (and (featurep 'qss-interface) qss-contract-enabled)
+      (should-error (qss-to tab 'xml) :type 'qss-contract-violation))
+    ;; ... and without contracts the function itself refuses it
+    (let ((qss-contract-enabled nil))
+      (should-error (qss-to tab 'xml) :type 'user-error))))
 
 (ert-deftest qss-to-csv-quoting-and-times ()
   (let* ((time (encode-time '(5 11 7 22 10 2026 nil -1 nil)))
