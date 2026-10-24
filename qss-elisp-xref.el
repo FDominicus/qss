@@ -69,6 +69,7 @@
 (require 'lisp-mnt)
 (require 'bytecomp)
 (require 'subr-x)
+(require 'help)                         ; help-function-arglist
 
 (defgroup qss-elisp-xref nil
   "Cross references of Emacs Lisp, in SQLite."
@@ -125,6 +126,11 @@ nil means: the Lisp directory of this Emacs and `package-user-dir'."
        line INTEGER, col INTEGER, parent_head TEXT, arg_index INTEGER)"
     "CREATE TABLE IF NOT EXISTS calls (caller TEXT, callee TEXT, file_id INTEGER)"
     "CREATE TABLE IF NOT EXISTS compiled (file_id INTEGER PRIMARY KEY, error TEXT)"
+    "CREATE TABLE IF NOT EXISTS summaries (
+       name TEXT PRIMARY KEY, kind TEXT, arglist TEXT, summary TEXT, uses INTEGER, files INTEGER)"
+    "CREATE TABLE IF NOT EXISTS categories (name TEXT, category TEXT, sources TEXT)"
+    "CREATE INDEX IF NOT EXISTS cat_category ON categories(category)"
+    "CREATE INDEX IF NOT EXISTS cat_name ON categories(name)"
     "CREATE INDEX IF NOT EXISTS occ_value ON occurrences(value)"
     "CREATE INDEX IF NOT EXISTS occ_file ON occurrences(file_id)"
     "CREATE INDEX IF NOT EXISTS occ_def ON occurrences(definition_id)"
@@ -714,10 +720,11 @@ Then mark the heads that are macro uses and special forms."
                              (not (and (fboundp 'subr-native-elisp-p)
                                        (subr-native-elisp-p (symbol-function s)))))
                     (push (list id (symbol-name s) (if (special-form-p s) "special-form" "primitive")
+                                (qss-elisp-xref--subr-arglist s)
                                 (ignore-errors (car (split-string (or (documentation s t) "") "\n"))))
                           rows)
                     (setq id (1+ id)))))
-      (qss-elisp-xref--insert-rows db "definitions" '("id" "name" "kind" "doc") rows))
+      (qss-elisp-xref--insert-rows db "definitions" '("id" "name" "kind" "arglist" "doc") rows))
     (sqlite-execute db "UPDATE occurrences SET context = 'head' WHERE context IN ('macro-use', 'special-form')")
     (sqlite-execute db "UPDATE occurrences SET context = 'special-form'
                         WHERE context = 'head' AND value IN
@@ -734,10 +741,126 @@ Then mark the heads that are macro uses and special forms."
       (qss-elisp-xref--insert-rows db "known_macros" '("name") macros)
       (sqlite-execute db "UPDATE occurrences SET context = 'macro-use'
                           WHERE context = 'head' AND value IN (SELECT name FROM known_macros)"))
+    (qss-elisp-xref--summaries db)
+    (qss-elisp-xref--categories db)
     (dolist (kv `(("format" . ,(number-to-string qss-elisp-xref-format))
                   ("emacs-version" . ,emacs-version)
                   ("indexed-at" . ,(format-time-string "%Y-%m-%d %H:%M:%S"))))
       (sqlite-execute db "INSERT OR REPLACE INTO meta VALUES (?, ?)" (vector (car kv) (cdr kv))))))
+
+;;; ------------------------------------------------------------------
+;;; Summaries and categories: what there is, the most used first
+
+(defun qss-elisp-xref--subr-arglist (subr)
+  "The arglist of the primitive SUBR as text, from its documentation, or nil."
+  (let ((args (ignore-errors (help-function-arglist subr t))))
+    (and (listp args) (qss-elisp-xref--print args))))
+
+(defconst qss-elisp-xref--callable-kinds
+  "('function', 'alias', 'macro', 'primitive', 'special-form', 'generic', 'command')"
+  "The kinds of definitions one calls, as SQL.")
+
+(defun qss-elisp-xref--summaries (db)
+  "Fill the table summaries of DB: one row per callable name, with its uses.
+Uses count calls, #' and macro uses; files the files they are in."
+  (sqlite-execute db "DELETE FROM summaries")
+  (sqlite-execute db (format "
+    INSERT INTO summaries (name, kind, arglist, summary, uses, files)
+    SELECT d.name, min(d.kind), max(d.arglist),
+           max(CASE WHEN d.doc IS NULL THEN NULL
+                    ELSE substr(d.doc, 1, instr(d.doc || char(10), char(10)) - 1) END),
+           coalesce(u.uses, 0), coalesce(u.files, 0)
+      FROM definitions d
+      LEFT JOIN (SELECT value, count(*) AS uses, count(DISTINCT file_id) AS files
+                   FROM occurrences
+                  WHERE context IN ('head', 'function', 'macro-use', 'special-form')
+                  GROUP BY value) u ON u.value = d.name
+     WHERE d.kind IN %s AND d.parent_id IS NULL
+     GROUP BY d.name" qss-elisp-xref--callable-kinds)))
+
+(defconst qss-elisp-xref-category-prefixes
+  '(("string-" . "string") ("seq-" . "sequence") ("file-name-" . "file-name")
+    ("buffer-" . "buffer") ("hash-table-" . "hash-table") ("regexp-" . "regexp")
+    ("alist-" . "alist") ("overlay-" . "overlay") ("process-" . "process")
+    ("keymap-" . "keymaps") ("symbol-" . "symbol") ("number-" . "number")
+    ("vector-" . "vector") ("file-" . "file"))
+  "Name prefixes that put a function into a category (the first match).")
+
+(defconst qss-elisp-xref-category-parameters
+  '((string . "string") (str . "string") (s . "string")
+    (seq . "sequence") (sequence . "sequence")
+    (list . "list") (lst . "list") (alist . "alist")
+    (vector . "vector") (vec . "vector")
+    (buffer . "buffer") (buf . "buffer") (buffer-or-name . "buffer")
+    (file . "file") (filename . "file-name") (file-name . "file-name")
+    (regexp . "regexp") (regex . "regexp")
+    (symbol . "symbol") (sym . "symbol") (keymap . "keymaps")
+    (process . "process") (proc . "process") (overlay . "overlay")
+    (number . "number") (hash-table . "hash-table"))
+  "Parameter names that put a function into a category.")
+
+(defconst qss-elisp-xref-category-types
+  '((string . "string") (sequence . "sequence") (list . "list") (cons . "list")
+    (vector . "vector") (bool-vector . "vector") (array . "sequence")
+    (number . "number") (integer . "number") (fixnum . "number") (float . "number")
+    (natnum . "number") (buffer . "buffer") (symbol . "symbol") (keyword . "symbol")
+    (hash-table . "hash-table") (process . "process") (overlay . "overlay"))
+  "Types in the type specifiers of the native compiler, and their category.")
+
+(defun qss-elisp-xref--shortdoc-members ()
+  "Alist (FUNCTION-NAME . GROUP) of the shortdoc groups of this Emacs."
+  (and (require 'shortdoc nil t) (boundp 'shortdoc--groups)
+       (cl-loop for (group . entries) in (symbol-value 'shortdoc--groups)
+                append (cl-loop for e in entries
+                                when (and (consp e) (symbolp (car e)) (not (keywordp (car e))))
+                                collect (cons (symbol-name (car e)) (symbol-name group))))))
+
+(defun qss-elisp-xref--type-members ()
+  "Alist (FUNCTION-NAME . CATEGORY) from the types the native compiler knows."
+  (when (or (require 'comp-common nil t) (require 'comp nil t))
+    (and (boundp 'comp-known-type-specifiers)
+         (cl-loop for (f type) in (symbol-value 'comp-known-type-specifiers)
+                  append (let ((cats nil))
+                           (cl-labels ((walk (x) (cond ((consp x) (walk (car x)) (walk (cdr x)))
+                                                       ((symbolp x)
+                                                        (let ((c (alist-get x qss-elisp-xref-category-types)))
+                                                          (when c (cl-pushnew c cats :test #'equal)))))))
+                             (walk type))
+                           (mapcar (lambda (c) (cons (symbol-name f) c)) cats))))))
+
+(defun qss-elisp-xref--arglist-symbols (arglist)
+  "The parameter names in the printed ARGLIST, as symbols."
+  (let ((args (ignore-errors (car (read-from-string arglist)))))
+    (cl-loop for a in (and (listp args) args)
+             for name = (if (consp a) (car a) a)   ; (x type) of cl-defmethod
+             when (and (symbolp name) (not (memq name '(&optional &rest &key &body))))
+             collect (intern (downcase (symbol-name name))))))
+
+(defun qss-elisp-xref--categories (db)
+  "Fill the table categories of DB from shortdoc, types, prefixes and parameters.
+One row per name and category; sources says what put it there."
+  (let ((found (make-hash-table :test #'equal)))
+    (cl-flet ((add (name cat source)
+                (let ((key (cons name cat)))
+                  (cl-pushnew source (gethash key found) :test #'equal))))
+      (pcase-dolist (`(,name . ,cat) (qss-elisp-xref--shortdoc-members)) (add name cat "shortdoc"))
+      (pcase-dolist (`(,name . ,cat) (qss-elisp-xref--type-members)) (add name cat "type"))
+      (pcase-dolist (`(,name ,arglist) (sqlite-select db "SELECT name, arglist FROM summaries"))
+        (let ((prefix (cl-find-if (lambda (p) (string-prefix-p (car p) name))
+                                  qss-elisp-xref-category-prefixes)))
+          (when prefix (add name (cdr prefix) "prefix")))
+        (when arglist
+          (dolist (p (qss-elisp-xref--arglist-symbols arglist))
+            (let ((cat (alist-get p qss-elisp-xref-category-parameters)))
+              (when cat (add name cat "param")))))))
+    (sqlite-execute db "DELETE FROM categories")
+    (let (rows)
+      (maphash (lambda (key sources)
+                 (push (list (car key) (cdr key) (string-join (sort sources #'string<) ",")) rows))
+               found)
+      ;; only names this database knows
+      (qss-elisp-xref--insert-rows db "categories" '("name" "category" "sources") rows)
+      (sqlite-execute db "DELETE FROM categories WHERE name NOT IN (SELECT name FROM summaries)"))))
 
 ;;; ------------------------------------------------------------------
 ;;; Running

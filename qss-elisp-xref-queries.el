@@ -80,6 +80,22 @@
                (join (xref "files") :on (:file-id :id))
                (group-by :origin :package :value) (sort-by :count :desc))
 
+;;; What there is for strings, the most used first (as M-x qss-xref-category)
+
+(qss-display-> (xref "categories") (where (= :category "string"))
+               (join (xref "summaries") :on (:name :name))
+               (where (not (like :name "%--%")))
+               (select :name :uses :files :sources :arglist :summary)
+               (sort-by :uses :desc))
+
+;;; Sure ones only: what shortdoc and the compiler's types say
+
+(qss-display-> (xref "categories")
+               (where (and (= :category "sequence")
+                           (or (like :sources "%shortdoc%") (like :sources "%type%"))))
+               (join (xref "summaries") :on (:name :name))
+               (select :name :uses :sources :summary) (sort-by :uses :desc))
+
 ;;; Local functions (cl-flet, cl-labels) and where they live
 
 (qss-display-> (xref "definitions") (where (in :kind '("local-function" "local-macro")))

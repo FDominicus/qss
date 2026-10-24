@@ -16,6 +16,8 @@
 ;;   M-x qss-xref-callees      what a function calls
 ;;   M-x qss-xref-definitions  where a name is defined, with its docstring
 ;;   M-x qss-xref-texts        the texts a library shows to people
+;;   M-x qss-xref-categories   what there is: string, list, buffer ... functions
+;;   M-x qss-xref-category     the functions of one category, the most used first
 ;;
 ;; In a table of these answers the menu (a, mouse-3) has the same
 ;; questions for the row: from a use to the callers, and so on.
@@ -170,6 +172,52 @@ Primitives and special forms of C have no file."
           (select :parent-head :line :col :value :path))
    (format "Texts of %s" library)))
 
+;;; What there is: categories, the most used first
+
+(defun qss-xref--check-summaries ()
+  "Signal an error if the database has no summaries yet (made by an older qss)."
+  (qss-xref--with-db db
+    (unless (ignore-errors (caar (sqlite-select db "SELECT 1 FROM summaries LIMIT 1")))
+      (user-error "The database has no categories yet; run M-x qss-elisp-xref-index once more"))))
+
+(defun qss-xref--category-names ()
+  "The categories in the database."
+  (qss-xref--with-db db
+    (mapcar #'car (sqlite-select db "SELECT DISTINCT category FROM categories ORDER BY 1"))))
+
+;;;###autoload
+(defun qss-xref-categories ()
+  "Show the categories of functions and how many each has.
+The categories are those of shortdoc (string, list, buffer ...); a
+function is in one when shortdoc, the types the native compiler knows,
+its name or the names of its parameters say so.  The menu of a row
+\(\`a') shows the functions of that category."
+  (interactive)
+  (qss-xref--check-summaries)
+  (qss-xref--show
+   (qss-> (xref "categories") (where (not (like :name "%--%")))
+          (group-by :category) (sort-by :count :desc))
+   "Categories of functions"))
+
+;;;###autoload
+(defun qss-xref-category (category &optional internal)
+  "Show the functions of CATEGORY, the most used first.
+Each with how often and in how many files it is used, why it is in the
+category (shortdoc, type, prefix, param), its arglist and the first line
+of its docstring.  With a prefix argument (INTERNAL) also the internal
+ones, whose names contain --."
+  (interactive (progn (qss-xref--check-summaries)
+                      (list (completing-read "Category: " (qss-xref--category-names) nil t)
+                            current-prefix-arg)))
+  (let ((rel (qss-> (xref "categories") (where (= :category category))
+                    (join (xref "summaries") :on (:name :name)))))
+    (unless internal
+      (setq rel (qss-> rel (where (not (like :name "%--%"))))))
+    (qss-xref--show
+     (qss-> rel (select :name :uses :files :kind :sources :arglist :summary)
+            (sort-by :uses :desc))
+     (format "Category %s%s" category (if internal " (with internal)" "")))))
+
 ;;; The same questions in the menu of an answer
 
 (defun qss-xref--answer-row-p ()
@@ -181,13 +229,27 @@ Primitives and special forms of C have no file."
 
 (cl-defmethod qss-actions ((row cons))
   "In an answer of the cross references: the questions for ROW's name too."
-  (let ((name (and (qss-xref--answer-row-p) (qss-xref--row-name row))))
+  (let* ((answer (qss-xref--answer-row-p))
+         (name (and answer (qss-xref--row-name row)))
+         (category (and answer (keywordp (car row)) (plist-get row :category))))
     (append (cl-call-next-method)
+            (and category
+                 (list (cons (format "Functions in category %s" category)
+                             (lambda (_) (qss-xref-category category)))))
             (and name
                  (list (cons (format "Uses of %s" name) (lambda (_) (qss-xref-uses name)))
                        (cons (format "Callers of %s" name) (lambda (_) (qss-xref-callers name)))
                        (cons (format "Callees of %s" name) (lambda (_) (qss-xref-callees name)))
                        (cons (format "Definitions of %s" name) (lambda (_) (qss-xref-definitions name))))))))
+
+(cl-defmethod qss-actions ((group qss-group))
+  "In the table of categories: the functions of the category of GROUP."
+  (let ((category (and (qss-xref--answer-row-p)
+                       (alist-get 'category (qss-group-keys group)))))
+    (append (cl-call-next-method)
+            (and category
+                 (list (cons (format "Functions in category %s" category)
+                             (lambda (_) (qss-xref-category category))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Keys
@@ -201,6 +263,8 @@ For instance: (keymap-global-set \"C-c x\" qss-xref-command-map)."
   "e" #'qss-xref-callees
   "d" #'qss-xref-definitions
   "t" #'qss-xref-texts
+  "k" #'qss-xref-categories
+  "K" #'qss-xref-category
   "i" #'qss-elisp-xref-index
   "m" #'qss-xref-mode)
 

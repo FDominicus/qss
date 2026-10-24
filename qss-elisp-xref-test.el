@@ -287,6 +287,53 @@ Second line of the doc.\"
       (qss-xref-mode -1)
       (should-not (eq (xref-find-backend) 'qss-xref)))))
 
+(ert-deftest qss-xref-summaries-and-categories ()
+  "Uses are counted; categories come from shortdoc, types, prefixes, parameters."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((dir (make-temp-file "qss-xref-cat-" t))
+         (lisp (expand-file-name "lisp" dir))
+         (qss-elisp-xref-database (expand-file-name "c.sqlite3" dir)))
+    (make-directory lisp)
+    (with-temp-file (expand-file-name "cat.el" lisp)
+      (insert ";;; cat.el --- for the test  -*- lexical-binding: t -*-
+\(defun cat-shout (string) \"Shout STRING.\" (upcase string))
+\(defun string-cat-twice (s) (concat s s))
+\(defun cat-sum (list) (apply #'+ list))
+\(defun cat--inner (x) x)
+\(defun cat-use () (list (cat-shout \"a\") (cat-shout \"b\") (mapcar #'cat-shout '(\"c\"))
+                       (string-cat-twice \"x\") (cat--inner 1)))
+\(provide 'cat)
+"))
+    (unwind-protect
+        (let ((db (progn (let ((inhibit-message t)) (qss-elisp-xref-run (list lisp)))
+                         (sqlite-open qss-elisp-xref-database))))
+          (unwind-protect
+              (cl-flet ((summary (name) (car (sqlite-select db "SELECT uses, files, summary, arglist FROM summaries WHERE name = ?" (vector name))))
+                        (sources (name cat) (caar (sqlite-select db "SELECT sources FROM categories WHERE name = ? AND category = ?" (vector name cat)))))
+                ;; two calls and one #'
+                (should (equal (summary "cat-shout") '(3 1 "Shout STRING." "(string)")))
+                (should (equal (car (summary "cat-use")) 0))
+                ;; the primitives have their arglist now
+                (should (equal (nth 3 (summary "upcase")) "(obj)"))
+                ;; why each is where it is
+                (should (equal (sources "cat-shout" "string") "param"))
+                (should (equal (sources "string-cat-twice" "string") "param,prefix"))
+                (should (equal (sources "cat-sum" "list") "param"))
+                (should (string-match-p "shortdoc" (sources "upcase" "string")))
+                (should-not (sources "cat-use" "string"))
+                ;; the commands: most used first, internal ones only when asked
+                (let ((names (lambda (&rest args)
+                               (let ((b (apply #'qss-xref-category args)))
+                                 (prog1 (with-current-buffer b
+                                          (mapcar (lambda (r) (plist-get r :name)) (qss-table-rows qss--table)))
+                                   (kill-buffer b))))))
+                  (let ((strings (funcall names "string")))
+                    (should (< (cl-position "cat-shout" strings :test #'equal)
+                               (cl-position "string-cat-twice" strings :test #'equal))))
+                  (should-not (member "cat--inner" (funcall names "symbol")))))
+            (sqlite-close db)))
+      (delete-directory dir t))))
+
 (ert-deftest qss-xref-command-map ()
   (require 'qss-elisp-xref-commands)
   (should (eq (keymap-lookup qss-xref-command-map "u") #'qss-xref-uses))

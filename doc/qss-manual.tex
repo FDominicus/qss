@@ -852,6 +852,8 @@ Over the Lisp of Emacs 29.3 (Debian) it held:
 \code{occurrences} & 2\,976\,276 & symbol or string (not docstrings, not numbers): line, column, context, the function around it and the argument place \\
 \code{calls} & 257\,912 & caller and callee after macro expansion \\
 \code{compiled} & 1\,626 & which files were compiled, and why not \\
+\code{summaries} & 49\,789 & callable name: kind, arglist, first docstring line, uses, files \\
+\code{categories} & 6\,769 & name and category (string, list, buffer \ldots), and why \\
 \bottomrule
 \end{tabularx}
 
@@ -905,6 +907,8 @@ own:
 \kbd{e} & \code{qss-xref-callees} & what a function calls \\
 \kbd{d} & \code{qss-xref-definitions} & kind, arglist, line and docstring \\
 \kbd{t} & \code{qss-xref-texts} & the texts a library shows to people \\
+\kbd{k} & \code{qss-xref-categories} & what there is, by category \\
+\kbd{K} & \code{qss-xref-category} & the functions of one category, the most used first \\
 \kbd{i} & \code{qss-elisp-xref-index} & build or update the database \\
 \kbd{m} & \code{qss-xref-mode} & the xref backend on or off \\
 \bottomrule
@@ -914,6 +918,42 @@ own:
 menu of a row (\kbd{a}, right mouse button) asks the same questions for the
 name in it, so one walks from a use to its callers, from there to their
 callees, and on.
+
+\section{What there is}
+
+Nobody knows all of Emacs Lisp; one cannot ask for what one does not
+know exists. \kbd{M-x qss-xref-categories} lists the categories of
+functions --- the groups of \code{shortdoc}: string, list, buffer,
+file-name, regexp, sequence \ldots{} --- and \kbd{M-x qss-xref-category}
+shows one of them, \textbf{the most used first}:
+
+\begin{Verbatim}
+name          uses  files  sources              summary
+concat       10493   1022  shortdoc,type        Concatenate all the arguments ...
+format        7769    892  param,shortdoc,type  Format a string out of a ...
+string-match  4707    723  param,prefix         Return index of start of first ...
+substring     2855    560  param,shortdoc,type  Return a new string whose ...
+\end{Verbatim}
+
+A function is in a category for one of four reasons, and \code{sources}
+says which: \code{shortdoc} lists it there; the types the native compiler knows
+for it have \code{string} (or list, buffer \ldots) as argument or result
+(\code{type}); its name begins so, \code{string-}, \code{seq-},
+\code{file-name-} (\code{prefix}); a parameter is named so, \code{string},
+\code{str}, \code{s}, \code{seq}, \code{buffer} (\code{param}). The first two
+are sure, the last two good guesses --- which is how one finds
+\code{skip-chars-forward} and \code{regexp-quote} among the string functions,
+and \code{mapconcat} and \code{nreverse} among the sequences.
+
+The uses are counted over all the indexed code: calls, \code{\#'} and macro
+uses, and in how many files. The functions used most are the ones to know
+first; the internal ones (\code{--} in the name) are left out unless asked for
+with \kbd{C-u}. Over Emacs 29.3 there are 1\,195 functions for strings and 118
+for sequences; the 25 used most of them come in 6\,ms. The table
+\code{summaries} has one row per function (kind, arglist, first line of the
+docstring, uses, files) --- the counterpart of Nushell's \code{help commands}
+--- and \code{categories} the categories; both are made at the end of each
+index run (some 20\,s more, 7\,MB).
 
 \section{Asking it in Lisp}
 

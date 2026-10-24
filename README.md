@@ -742,6 +742,8 @@ definitions, 2 976 276 occurrences, 257 912 calls, 430 MB. Reading took
 | `occurrences` | symbol and string (not docstrings) with line, column, context, the function around it (`parent_head`) and its argument place (`arg_index`) |
 | `calls`       | caller and callee after macro expansion                              |
 | `compiled`    | which files were compiled, and why not                               |
+| `summaries`   | callable name: kind, arglist, first docstring line, uses, files      |
+| `categories`  | name and category (string, list, buffer …), and why                  |
 
 The context of a symbol tells what it is there: `head`, `macro-use`,
 `special-form`, `function` (`#'f`), `quoted`, `defining`, `parameter`,
@@ -767,6 +769,8 @@ The context of a symbol tells what it is there: `head`, `macro-use`,
 | `C-c x e` | `qss-xref-callees`: what a function calls                        |
 | `C-c x d` | `qss-xref-definitions`: kind, arglist, line, docstring           |
 | `C-c x t` | `qss-xref-texts`: the texts a library shows to people            |
+| `C-c x k` | `qss-xref-categories`: what there is, by category                |
+| `C-c x K` | `qss-xref-category`: the functions of one, the most used first   |
 | `C-c x i` | `qss-elisp-xref-index`: build or update                          |
 | `C-c x m` | `qss-xref-mode` on or off                                        |
 
@@ -775,6 +779,32 @@ Emacs' own Elisp backend answers (`qss-xref-fallback`). The commands
 take the name at point; `RET` on a row opens the file at line and
 column, and the menu of a row (`a`, `mouse-3`) asks the same questions
 for its name, so one walks from a use to its callers and on.
+
+### What there is
+
+`M-x qss-xref-categories` lists the categories of functions — the
+groups of `shortdoc`: string, list, buffer, file-name, regexp,
+sequence … — with how many functions each has. `M-x qss-xref-category`
+shows one of them, **the most used first**:
+
+```
+name         uses  files  sources              summary
+concat      10493   1022  shortdoc,type        Concatenate all the arguments and make the result a string.
+format       7769    892  param,shortdoc,type  Format a string out of a format-string and arguments.
+string-match 4707    723  param,prefix         Return index of start of first match for REGEXP in STRING.
+substring    2855    560  param,shortdoc,type  Return a new string whose contents are a substring of STRING.
+...
+```
+
+A function is in a category when shortdoc says so, when the types the
+native compiler knows say so (`string` in or out), when its name
+begins so (`string-`, `seq-`, `file-name-` …) or when a parameter is
+named so (`string`, `str`, `s`, `seq`, `buffer` …); `sources` tells
+which. The functions are counted by how often they are used in all
+the indexed code. Over Emacs 29.3: 1 195 functions for strings, 118
+for sequences — the 25 used most of them in 6 ms. The table
+`summaries` has one row per function (kind, arglist, first line of the
+docstring, uses, files); `categories` the categories.
 
 ### In Lisp
 
