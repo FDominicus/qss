@@ -454,5 +454,30 @@ The real central database is never touched."
     (should (= 1 (qss-count (qss-sqlite "one"))))
     (should-error (qss-sqlite (expand-file-name "x.sqlite3" dir)) :type 'user-error)))
 
+(ert-deftest qss-database-follows-data-directory ()
+  "Without a file of its own the central database lies in `qss-data-directory'."
+  (let ((user-emacs-directory "/home/u/.emacs.d/"))
+    (let ((qss-data-directory nil) (qss-database nil))
+      (should (equal (qss-database-file) (expand-file-name "/home/u/.emacs.d/qss.sqlite3"))))
+    (let ((qss-data-directory "/local/qss/") (qss-database nil))
+      (should (equal (qss-database-file) (expand-file-name "/local/qss/qss.sqlite3")))
+      (should (equal (qss-data-file "x.db") (expand-file-name "/local/qss/x.db"))))
+    ;; a file set of its own wins
+    (let ((qss-data-directory "/local/qss/") (qss-database "/other/central.sqlite3"))
+      (should (equal (qss-database-file) (expand-file-name "/other/central.sqlite3"))))))
+
+(ert-deftest qss-into-sqlite-makes-data-directory ()
+  "Storing into the central file makes `qss-data-directory' if need be."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((dir (make-temp-file "qss-data-" t))
+         (qss-data-directory (expand-file-name "not/yet/" dir))
+         (qss-database nil))
+    (unwind-protect
+        (progn
+          (qss-> '((:a 1)) (into sqlite "one"))
+          (should (file-exists-p (expand-file-name "qss.sqlite3" qss-data-directory)))
+          (should (= 1 (qss-count (qss-sqlite "one")))))
+      (delete-directory dir t))))
+
 (provide 'qss-sql-test)
 ;;; qss-sql-test.el ends here

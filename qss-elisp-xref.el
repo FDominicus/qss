@@ -75,9 +75,22 @@
   :group 'qss
   :prefix "qss-elisp-xref-")
 
-(defcustom qss-elisp-xref-database (locate-user-emacs-file "elisp-xref.sqlite3")
-  "The SQLite file of the cross references."
-  :type 'file)
+(defcustom qss-elisp-xref-database nil
+  "The SQLite file of the cross references.
+nil means elisp-xref.sqlite3 in `qss-data-directory' (when qss is
+loaded) or else in `user-emacs-directory'.  Keep it on a local disk:
+SQLite over a network drive is not safe when two Emacs use it."
+  :type '(choice (const :tag "elisp-xref.sqlite3 in qss-data-directory" nil) file))
+
+(defvar qss-data-directory)             ; qss-sql.el; this file stands alone
+
+(defun qss-elisp-xref-database-file ()
+  "The cross reference database, as an absolute file name.
+See `qss-elisp-xref-database'."
+  (expand-file-name
+   (or qss-elisp-xref-database
+       (expand-file-name "elisp-xref.sqlite3"
+                         (or (bound-and-true-p qss-data-directory) user-emacs-directory)))))
 
 (defcustom qss-elisp-xref-directories nil
   "Directories to index, searched recursively.
@@ -88,7 +101,7 @@ nil means: the Lisp directory of this Emacs and `package-user-dir'."
   "Regexp of file names not to index (generated files)."
   :type 'regexp)
 
-(defconst qss-elisp-xref-format 2
+(defconst qss-elisp-xref-format 3
   "Version of the tables; a file of another version is made anew.")
 
 ;;; ------------------------------------------------------------------
@@ -231,8 +244,9 @@ nil means: the Lisp directory of this Emacs and `package-user-dir'."
           ((consp x) (qss-elisp-xref--bare (car x))))))
 
 (defun qss-elisp-xref--print (x)
-  "Return X printed, symbols without positions."
-  (let ((print-symbols-bare t) (print-length nil) (print-level nil))
+  "Return X printed, symbols without positions.
+Without print-quoted: the arglist (function sequence) stays as it is."
+  (let ((print-symbols-bare t) (print-length nil) (print-level nil) (print-quoted nil))
     (prin1-to-string x)))
 
 (defun qss-elisp-xref--add (key item)
@@ -588,7 +602,9 @@ Return the number of forms."
   "Index the file PATH into DB, unless it is unchanged.  Return t if read."
   (with-temp-buffer
     (insert-file-contents path)
-    (let* ((sha1 (secure-hash 'sha1 (current-buffer)))
+    (let* ((sha1 (secure-hash 'sha1 (encode-coding-string (buffer-string) 'utf-8-emacs t)))
+           ;; not the buffer: hashing it encodes it in the file's coding
+           ;; system, and Emacs asks for another if that fails (ARRAY30.el)
            (old (car (sqlite-select db "SELECT id, sha1 FROM files WHERE path = ?" (vector path)))))
       (if (equal (nth 1 old) sha1)
           nil
@@ -654,7 +670,7 @@ compiler's call tree (`byte-compile-generate-call-tree')."
 FILE defaults to `qss-elisp-xref-database'.  Compiling loads what the
 files require, so this belongs in an Emacs of its own, after
 `qss-elisp-xref-run' (see `qss-elisp-xref-index')."
-  (let* ((db (qss-elisp-xref--open (or file qss-elisp-xref-database)))
+  (let* ((db (qss-elisp-xref--open (or file (qss-elisp-xref-database-file))))
          (todo (sqlite-select db "SELECT id, path FROM files
                                   WHERE id NOT IN (SELECT file_id FROM compiled) ORDER BY path"))
          (i 0) (start (float-time)))
@@ -682,7 +698,8 @@ The variable `qss-elisp-xref-database' names the file (--eval to set it).
 The installed packages are activated first, so that the files of a
 package find the packages they require."
   (when (require 'package nil t) (package-initialize))
-  (qss-elisp-xref-calls-run))
+  (let ((inhibit-interaction t))         ; see `qss-elisp-xref-batch'
+    (qss-elisp-xref-calls-run)))
 
 ;;; After all files: what C defines, and what the heads are
 
@@ -732,7 +749,7 @@ Only changed files are read again; files gone are dropped.  Meant for
 an Emacs of its own (see `qss-elisp-xref-index'); it takes a while."
   (let* ((dirs (or dirs (qss-elisp-xref--directories)))
          (files (qss-elisp-xref--files dirs))
-         (db (qss-elisp-xref--open (or file qss-elisp-xref-database)))
+         (db (qss-elisp-xref--open (or file (qss-elisp-xref-database-file))))
          (read 0) (i 0) (start (float-time)))
     (unwind-protect
         (progn
@@ -757,7 +774,9 @@ an Emacs of its own (see `qss-elisp-xref-index'); it takes a while."
   "Entry for emacs --batch: the remaining arguments are the directories.
   emacs --batch -L QSS -l qss-elisp-xref -f qss-elisp-xref-batch [DIR...]
 The variable `qss-elisp-xref-database' names the file (--eval to set it)."
-  (let ((dirs (mapcar #'expand-file-name command-line-args-left)))
+  (let ((dirs (mapcar #'expand-file-name command-line-args-left))
+        ;; a question would wait for ever: make it an error of that file
+        (inhibit-interaction t))
     (setq command-line-args-left nil)
     (qss-elisp-xref-run dirs)))
 
@@ -779,7 +798,7 @@ messages are in the buffer *qss-elisp-xref*."
                        (expand-file-name invocation-name invocation-directory)
                        "--batch" "-L" here "-l" "qss-elisp-xref"
                        "--eval" (format "(setq qss-elisp-xref-database %S package-user-dir %S)"
-                                        (expand-file-name qss-elisp-xref-database)
+                                        (qss-elisp-xref-database-file)
                                         (and (boundp 'package-user-dir) package-user-dir))
                        "-f" fn args)))
       (set-process-sentinel

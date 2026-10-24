@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.11.0.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.12.1.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -53,7 +53,11 @@ All options are in the customization group \code{qss} (\code{M-x customize-group
 \endhead
 \code{qss-contract-enabled} & \code{t} & Non-nil means contracts are checked. \\
 \code{qss-copy-format} & \code{text} & Format in which \textbackslash{}\code{w} copies a table; see \code{qss-to}. \\
-\code{qss-database} & \code{"\textasciitilde{}/\allowbreak{}.emacs.d/\allowbreak{}qss.sqlite3"} & The central SQLite file of qss. \\
+\code{qss-data-directory} & \code{nil} & Directory of the SQLite files of qss; nil means \code{user-emacs-directory}. \\
+\code{qss-database} & \code{nil} & The central SQLite file of qss; nil means qss.sqlite3 in \code{qss-data-directory}. \\
+\code{qss-elisp-xref-database} & \code{nil} & The SQLite file of the cross references. \\
+\code{qss-elisp-xref-directories} & \code{nil} & Directories to index, searched recursively. \\
+\code{qss-elisp-xref-skip} & \code{"\textbackslash{}\textbackslash{}(?:-autoloads\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}-pkg\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}loaddefs\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}ldefs-boot\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}\textbackslash{}\textbackslash{}.dir-locals\textbackslash{}\textbackslash{})\textbackslash{}\textbackslash{}.el"} & Regexp of file names not to index (generated files). \\
 \code{qss-max-column-width} & \code{60} & Maximum width of a text column without its own :width, in characters. \\
 \code{qss-menu-label-width} & \code{70} & Maximum width of a label in the actions at point. \\
 \code{qss-nu-arguments} & \code{("--no-config-file")} & Arguments for \code{qss-nu-program} before -c. \\

@@ -325,8 +325,22 @@ qss> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
 ```
 
 - Without `:file` the table goes into the central file `qss-database`
-  (`~/.emacs.d/qss.sqlite3`); `(sqlite "big-files")` and `(tables)`
-  read from there.
+  (`qss.sqlite3` in `qss-data-directory`, by default `~/.emacs.d/`);
+  `(sqlite "big-files")` and `(tables)` read from there.
+- Keep the SQLite files on a local disk. When `~/.emacs.d` lies on a
+  network drive used by several Emacs at once (say Linux and Windows
+  over Samba), SQLite's locking cannot be trusted there and a file can
+  break. Then give each Emacs its own directory:
+
+  ```elisp
+  (setq qss-data-directory
+        (if (eq system-type 'windows-nt)
+            (expand-file-name "qss/" (getenv "LOCALAPPDATA"))
+          (locate-user-emacs-file "")))
+  ```
+
+  `qss-database` and `qss-elisp-xref-database` follow it unless they
+  are set themselves.
 - If the table exists, `into` refuses unless told: `:replace` drops it
   first, `:append` adds the rows. All in one transaction.
 - Sizes are stored as INTEGER bytes, durations as INTEGER nanoseconds,
@@ -695,7 +709,8 @@ second step compiles every file into a directory thrown away and keeps
 what the byte compiler saw as calls. A second run reads only the files
 that changed.
 
-The tables, in `~/.emacs.d/elisp-xref.sqlite3`:
+The tables, in `elisp-xref.sqlite3` in `qss-data-directory` (by
+default `~/.emacs.d/`; `qss-elisp-xref-database` names another file):
 
 | table         | one row per                                                          |
 |---------------|----------------------------------------------------------------------|
@@ -712,19 +727,35 @@ are all the texts the program shows to people — a start for
 translations, or for a look at how messages are written:
 
 ```elisp
-(let ((db "~/.emacs.d/elisp-xref.sqlite3"))
+(let ((db (qss-elisp-xref-database-file)))
   (qss-> (sqlite db "occurrences")
          (where (and (= :context "string") (= :parent-head "user-error")))
          (join (sqlite db "files") :on (file-id id))
          (group-by library) (sort-by count :desc)))
 ```
 
+The questions one asks most are commands. Each takes the name at
+point as default: the symbol in a source buffer, the value or row in a
+qss table.
+
+| command                   | shows                                                  |
+|---------------------------|--------------------------------------------------------|
+| `M-x qss-xref-uses`        | every place a name appears, with the definition it is in |
+| `M-x qss-xref-callers`     | the functions that call it (after macro expansion)      |
+| `M-x qss-xref-callees`     | what a function calls                                   |
+| `M-x qss-xref-definitions` | where it is defined: kind, arglist, docstring           |
+| `M-x qss-xref-texts`       | the texts a library shows to people                     |
+
+`RET` on a row opens the file at line and column; the menu of a row
+(`a`, `mouse-3`) asks the same questions for the name in that row, so
+one can walk from a use to its callers and on.
+
 `qss-elisp-xref-queries.el` has more questions, one form each, to try
 with `C-x C-e`.
 
-Over the Lisp of Emacs 29.3 (1598 files, 100 000 forms, 2.8 million
-occurrences, 380 MB) reading takes about seven minutes, compiling about
-two; the queries above run in SQLite and take well under a second.
+Over the Lisp of Emacs 29.3 (1603 files, 100 000 forms, 2.9 million
+occurrences, 380 MB) reading takes about two and a half minutes,
+compiling about two; the queries above run in SQLite and take well under a second.
 
 ## Manual
 

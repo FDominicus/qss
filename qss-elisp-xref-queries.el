@@ -17,7 +17,7 @@
 
 (require 'qss)
 
-(defvar qss-xq-db (expand-file-name "elisp-xref.sqlite3" user-emacs-directory)
+(defvar qss-xq-db (qss-elisp-xref-database-file)
   "The database the questions ask.")
 
 (defun qss-xq (table)

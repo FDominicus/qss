@@ -58,12 +58,29 @@
 (require 'sqlite)                       ; with-sqlite-transaction
 (require 'qss-pipe)
 
-(defcustom qss-database (locate-user-emacs-file "qss.sqlite3")
-  "The central SQLite file of qss.
+(defcustom qss-data-directory nil
+  "Directory of the SQLite files of qss; nil means `user-emacs-directory'.
+`qss-database' and `qss-elisp-xref-database' lie here unless they are
+set themselves.  Choose a local disk when `user-emacs-directory' is on a
+network drive shared by several Emacs: SQLite must not be used over
+SMB or NFS by two processes at once (its locking is unreliable there)."
+  :type '(choice (const :tag "user-emacs-directory" nil) directory)
+  :group 'qss)
+
+(defcustom qss-database nil
+  "The central SQLite file of qss; nil means qss.sqlite3 in `qss-data-directory'.
 \=(into sqlite \"Name\") stores there, (sqlite \"Name\") and (tables)
 read from there, unless a file is given."
-  :type 'file
+  :type '(choice (const :tag "qss.sqlite3 in qss-data-directory" nil) file)
   :group 'qss)
+
+(defun qss-data-file (name)
+  "The file NAME in `qss-data-directory', as an absolute file name."
+  (expand-file-name name (or qss-data-directory user-emacs-directory)))
+
+(defun qss-database-file ()
+  "The central SQLite file: `qss-database', or qss.sqlite3 in `qss-data-directory'."
+  (expand-file-name (or qss-database (qss-data-file "qss.sqlite3"))))
 
 (defcustom qss-sql-display-limit 1000
   "Maximum number of rows a query fetches for display."
@@ -224,7 +241,7 @@ With one argument, FILE is the name of a table in `qss-database'."
     (when (string-match-p "[/\\]\\|\\.\\(?:sqlite3?\\|db\\)\\'" file)
       (user-error "%s looks like a file: give the table too, or use (tables %S)" file file))
     (setq table file
-          file qss-database))
+          file (qss-database-file)))
   (let* ((file (qss-sql--file file))
          (tab (qss-sql--find-table file table)))
     (qss-relation--make :file file :table (car tab) :columns (cdr tab)
@@ -709,7 +726,7 @@ The rows are groups (`qss-group') whose rows a query of their own fetches."
 (defun qss-tables (&optional file)
   "Return the tables of the SQLite file FILE (default `qss-database').
 RET on one of them shows its rows."
-  (let ((file (qss-sql--file (or file qss-database))))
+  (let ((file (qss-sql--file (or file (qss-database-file)))))
     (qss-make-table (format "tables %s" (file-name-nondirectory file))
                     (mapcar (lambda (tab) (qss-db-table--make :file file :name (car tab)
                                                               :columns (cdr tab)))
@@ -847,7 +864,7 @@ rows written."
 (defun qss-sql--into-args (args)
   "Return (NAME FILE MODE) from the ARGS of (into sqlite NAME ...).
 Keywords: :file FILE, :replace, :append (with or without a value)."
-  (let ((name (pop args)) (file qss-database) (mode nil))
+  (let ((name (pop args)) (file (qss-database-file)) (mode nil))
     (unless (or (stringp name) (and name (symbolp name)))
       (user-error "into sqlite: first the name of the table, e.g. (into sqlite \"files\")"))
     (while args

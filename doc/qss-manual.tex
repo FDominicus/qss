@@ -394,8 +394,12 @@ qss> (nu "sys disks") (into sqlite "disks" :append)
 
 \begin{itemize}
 \item Without \code{:file} the table goes into the central file
-  \code{qss-database}; \code{(sqlite "big-files")} and \code{(tables)} read
-  from there.
+  \code{qss-database} (\file{qss.sqlite3} in \code{qss-data-directory},
+  by default \file{\textasciitilde/.emacs.d/}); \code{(sqlite "big-files")}
+  and \code{(tables)} read from there.
+\item Keep the SQLite files on a local disk. If \file{\textasciitilde/.emacs.d}
+  lies on a network drive that several Emacs use at once, SQLite's locking
+  cannot be trusted there; give each Emacs its own \code{qss-data-directory}.
 \item An existing table is not touched unless \code{:replace} or
   \code{:append} says so. All in one transaction.
 \item Sizes and durations are stored as INTEGER (bytes, nanoseconds), times as

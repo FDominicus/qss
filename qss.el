@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.12.0
+;; Version: 0.12.1
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -82,6 +82,7 @@
 (require 'qss-nu)
 (require 'qss-edit)
 ;; Last: the contracts of the interface, on everything above.
+(require 'qss-elisp-xref-commands)
 (require 'qss-interface)
 
 ;;; Tests

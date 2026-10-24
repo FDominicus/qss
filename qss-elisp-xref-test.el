@@ -191,6 +191,11 @@ Second line of the doc.\"
       (should (= 1 (caar (qss-xtest--rows db "SELECT count(*) FROM files"))))
       (should (null (qss-xtest--rows db "SELECT * FROM occurrences WHERE value = 'other-f'"))))))
 
+(ert-deftest qss-xref-print-arglist ()
+  ;; an arglist is not code: (function sequence) stays as it is
+  (should (equal (qss-elisp-xref--print '(function sequence)) "(function sequence)"))
+  (should (equal (qss-elisp-xref--print '(quote x)) "(quote x)")))
+
 (ert-deftest qss-xref-calls ()
   (qss-xtest--with-index db
     (qss-elisp-xref-calls-run)
@@ -204,6 +209,60 @@ Second line of the doc.\"
       (should (member "sample-greet" (funcall callees "sample-chars")))
       (should-not (member "sample-twice" (funcall callees "sample-chars")))
       (should (equal (qss-xtest--rows db "SELECT error FROM compiled") '((nil)))))))
+
+(ert-deftest qss-xref-commands ()
+  (require 'qss-elisp-xref-commands)
+  (qss-xtest--with-index db
+    (qss-elisp-xref-calls-run)
+    (let ((buffers nil))
+      (unwind-protect
+          (cl-flet ((rows (fn name)
+                      (with-current-buffer (funcall fn name)
+                        (push (current-buffer) buffers)
+                        (qss-> (qss-table-rows qss--table) collect))))
+            ;; sample-greet is used in its definition, in the alias and in sample-chars
+            (let ((uses (rows #'qss-xref-uses "sample-greet")))
+              (should (equal (mapcar (lambda (r) (plist-get r :name)) uses)
+                             '("sample-greet" "sample-alias" "sample-chars")))
+              (should (equal (mapcar (lambda (r) (plist-get r :context)) uses)
+                             '("defining" "function" "head")))
+              (should (string-suffix-p "sample.el" (plist-get (car uses) :path))))
+            (should (equal (mapcar (lambda (r) (plist-get r :caller)) (rows #'qss-xref-callers "sample-greet"))
+                           '("sample-chars")))
+            (should (member "message" (mapcar (lambda (r) (plist-get r :callee))
+                                              (rows #'qss-xref-callees "sample-greet"))))
+            (let ((def (car (rows #'qss-xref-definitions "sample-greet"))))
+              (should (equal (plist-get def :arglist) "(name &optional loud)"))
+              (should (= 12 (plist-get def :line))))
+            ;; the questions in the menu of an answer row
+            (with-current-buffer (qss-xref-uses "sample-greet")
+              (push (current-buffer) buffers)
+              (let ((labels (mapcar #'car (qss-actions (car (qss-table-rows qss--table))))))
+                (should (member "Callers of sample-greet" labels))))
+            ;; elsewhere plist rows keep their actions only
+            (should-not (cdr (with-temp-buffer (qss-actions '(:name "x"))))))
+        (mapc #'kill-buffer (seq-filter #'buffer-live-p buffers))))))
+
+(ert-deftest qss-elisp-xref-database-follows-data-directory ()
+  "Without a file of its own the database lies in `qss-data-directory'."
+  (let ((user-emacs-directory "/home/u/.emacs.d/"))
+    (let ((qss-data-directory nil) (qss-elisp-xref-database nil))
+      (should (equal (qss-elisp-xref-database-file) (expand-file-name "/home/u/.emacs.d/elisp-xref.sqlite3"))))
+    (let ((qss-data-directory "/local/qss/") (qss-elisp-xref-database nil))
+      (should (equal (qss-elisp-xref-database-file) (expand-file-name "/local/qss/elisp-xref.sqlite3"))))
+    (let ((qss-data-directory "/local/qss/") (qss-elisp-xref-database "/x/xref.db"))
+      (should (equal (qss-elisp-xref-database-file) (expand-file-name "/x/xref.db"))))))
+
+(ert-deftest qss-elisp-xref-database-stands-alone ()
+  "In an Emacs with only qss-elisp-xref loaded the default is user-emacs-directory."
+  (let ((emacs (expand-file-name invocation-name invocation-directory))
+        (here (file-name-directory (locate-library "qss-elisp-xref"))))
+    (with-temp-buffer
+      (should (zerop (call-process emacs nil t nil "-Q" "--batch" "-L" here
+                                   "-l" "qss-elisp-xref"
+                                   "--eval" "(setq user-emacs-directory \"/home/u/.emacs.d/\")"
+                                   "--eval" "(princ (qss-elisp-xref-database-file))")))
+      (should (string-suffix-p "/home/u/.emacs.d/elisp-xref.sqlite3" (buffer-string))))))
 
 (provide 'qss-elisp-xref-test)
 ;;; qss-elisp-xref-test.el ends here

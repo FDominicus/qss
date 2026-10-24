@@ -67,9 +67,9 @@
    '("\\textbf{Option}" "\\textbf{Default}" "\\textbf{Meaning}")
    (mapcar (lambda (s)
              (list (qss-manual--code (symbol-name s))
-                   ;; a file name may break after a slash
-                   (string-replace
-                    "/" "/\\allowbreak{}"
+                   ;; a file name may break after a slash, a regexp after \|
+                   (replace-regexp-in-string
+                    "/\\|\\\\textbar{}" "\\&\\\\allowbreak{}"
                     (qss-manual--code
                      (let ((v (eval (car (get s 'standard-value)) t)))
                        (if (and (stringp v) (string-prefix-p (expand-file-name "~") v))
