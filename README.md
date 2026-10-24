@@ -584,7 +584,19 @@ searched. What it adds is that every buffer can take part.
 ```
 
 `qss->` returns a table, or a query on SQLite; `collect` turns either
-into a list, `qss-display` shows it.
+into a list, `qss-display` shows it. `(qss-display-> ...)` is short
+for `(qss-display (qss-> ...))`.
+
+A column may be written with or without a colon: `(select name)` and
+`(select :name)` are the same. In code the colon is better, since one
+rule then holds everywhere — with a colon it is a column, without it is
+Lisp:
+
+```elisp
+(defun big-files-of (dir size)
+  (qss-display-> (files dir) (where (> :size size))
+                 (select :name :size :modified) (sort-by :size :desc)))
+```
 
 ## Own row types
 
@@ -688,29 +700,39 @@ be used for any Emacs Lisp:
 
 ## A cross reference of Emacs Lisp
 
-`qss-elisp-xref.el` stands on its own (it needs only Emacs 29 with
-SQLite) and makes a database of all Emacs Lisp it finds: the Lisp of
-Emacs itself and the packages in `package-user-dir`.
+`qss-elisp-xref.el` makes a database of all Emacs Lisp it finds: the
+Lisp of Emacs itself and the installed packages. Every definition,
+every use of a name with what it is there, every call after macro
+expansion — for code loaded or not, compressed or not. Three million
+rows, and every question an ordinary qss pipe.
+
+### Building it
 
 ```
-M-x qss-elisp-xref-index        ; in an Emacs of its own, in the background
+M-x qss-elisp-xref-index        ; two steps, each in an Emacs of its own
 ```
 
 or from a shell:
 
 ```
-emacs --batch -L /path/to/qss -l qss-elisp-xref -f qss-elisp-xref-batch [DIR...]
-emacs --batch -L /path/to/qss -l qss-elisp-xref -f qss-elisp-xref-calls-batch
+emacs --batch -L ~/.emacs.d/lib/qss -l qss-elisp-xref -f qss-elisp-xref-batch [DIR...]
+emacs --batch -L ~/.emacs.d/lib/qss -l qss-elisp-xref -f qss-elisp-xref-calls-batch
 ```
 
-The first step only reads: the Lisp reader with the position of every
-symbol (`read-positioning-symbols`). Nothing is loaded or run. The
-second step compiles every file into a directory thrown away and keeps
-what the byte compiler saw as calls. A second run reads only the files
-that changed.
+Without directories: the Lisp of the running Emacs and
+`package-user-dir`. A batch Emacs does not read the init file, so
+give the package directory as an argument and, if the database is not
+the default, `--eval '(setq qss-elisp-xref-database "...")'` before
+`-f` in both steps; `M-x qss-elisp-xref-index` passes both on itself.
 
-The tables, in `elisp-xref.sqlite3` in `qss-data-directory` (by
-default `~/.emacs.d/`; `qss-elisp-xref-database` names another file):
+The first step only reads (`read-positioning-symbols`); nothing is
+loaded or run. The second compiles every file into a directory thrown
+away and keeps the byte compiler's call tree. One transaction per
+file; the next run reads only what changed.
+
+Over the Lisp of Emacs 29.3: 1 626 files, 100 543 forms, 80 119
+definitions, 2 976 276 occurrences, 257 912 calls, 430 MB. Reading took
+2 min 28 s, compiling 1 min 45 s (two cores, 2.1 GHz).
 
 | table         | one row per                                                          |
 |---------------|----------------------------------------------------------------------|
@@ -719,43 +741,73 @@ default `~/.emacs.d/`; `qss-elisp-xref-database` names another file):
 | `definitions` | defun, defmacro, defvar, cl-defmethod, local cl-labels …: arglist, whole docstring |
 | `occurrences` | symbol and string (not docstrings) with line, column, context, the function around it (`parent_head`) and its argument place (`arg_index`) |
 | `calls`       | caller and callee after macro expansion                              |
+| `compiled`    | which files were compiled, and why not                               |
 
 The context of a symbol tells what it is there: `head`, `macro-use`,
 `special-form`, `function` (`#'f`), `quoted`, `defining`, `parameter`,
-`binding`, `other`, or `string`. The strings with their `parent_head`
-are all the texts the program shows to people — a start for
-translations, or for a look at how messages are written:
+`binding`, `other`, or `string`.
+
+### M-. M-? and keys
+
+`qss-xref-mode` makes the database a backend of xref:
 
 ```elisp
-(let ((db (qss-elisp-xref-database-file)))
-  (qss-> (sqlite db "occurrences")
-         (where (and (= :context "string") (= :parent-head "user-error")))
-         (join (sqlite db "files") :on (file-id id))
-         (group-by library) (sort-by count :desc)))
+(add-hook 'emacs-lisp-mode-hook #'qss-xref-mode)
+(keymap-global-set "C-c x" qss-xref-command-map)
 ```
 
-The questions one asks most are commands. Each takes the name at
-point as default: the symbol in a source buffer, the value or row in a
-qss table.
+| key       | does                                                             |
+|-----------|------------------------------------------------------------------|
+| `M-.`     | to the definition; a generic lists its methods with specializers |
+| `M-?`     | every use in code (not strings, comments, docstrings)            |
+| `C-M-.`   | definitions by parts of the name                                 |
+| `M-,`     | back                                                             |
+| `C-c x u` | `qss-xref-uses`: every place a name appears, with the definition it stands in |
+| `C-c x c` | `qss-xref-callers`: who calls it, after macro expansion          |
+| `C-c x e` | `qss-xref-callees`: what a function calls                        |
+| `C-c x d` | `qss-xref-definitions`: kind, arglist, line, docstring           |
+| `C-c x t` | `qss-xref-texts`: the texts a library shows to people            |
+| `C-c x i` | `qss-elisp-xref-index`: build or update                          |
+| `C-c x m` | `qss-xref-mode` on or off                                        |
 
-| command                   | shows                                                  |
-|---------------------------|--------------------------------------------------------|
-| `M-x qss-xref-uses`        | every place a name appears, with the definition it is in |
-| `M-x qss-xref-callers`     | the functions that call it (after macro expansion)      |
-| `M-x qss-xref-callees`     | what a function calls                                   |
-| `M-x qss-xref-definitions` | where it is defined: kind, arglist, docstring           |
-| `M-x qss-xref-texts`       | the texts a library shows to people                     |
+Where the database knows nothing (not indexed yet, C primitives)
+Emacs' own Elisp backend answers (`qss-xref-fallback`). The commands
+take the name at point; `RET` on a row opens the file at line and
+column, and the menu of a row (`a`, `mouse-3`) asks the same questions
+for its name, so one walks from a use to its callers and on.
 
-`RET` on a row opens the file at line and column; the menu of a row
-(`a`, `mouse-3`) asks the same questions for the name in that row, so
-one can walk from a use to its callers and on.
+### In Lisp
 
-`qss-elisp-xref-queries.el` has more questions, one form each, to try
-with `C-x C-e`.
+`(xref "TABLE")` is a source; `qss-display->` shows a pipe:
 
-Over the Lisp of Emacs 29.3 (1603 files, 100 000 forms, 2.9 million
-occurrences, 380 MB) reading takes about two and a half minutes,
-compiling about two; the queries above run in SQLite and take well under a second.
+```elisp
+(qss-display-> (xref "occurrences") (where (= :context "macro-use"))
+               (group-by :value) (sort-by :count :desc) (first 20))
+```
+
+`qss-elisp-xref-queries.el` has fifteen questions, one form each, to
+try with `C-x C-e`.
+
+### How fast, and how exact
+
+Warm cache, best of three; time / what was found.
+
+|                                       | `string-trim` | `gamegrid-set-cell` | `message`        |
+|---------------------------------------|---------------|---------------------|------------------|
+| `M-?` on the database                 | 2 ms / 55     | 1 ms / 30           | 159 ms / 5 747   |
+| `rg -w`, sources unpacked             | 21 ms / 100   | 21 ms / 30          | 46 ms / 18 230   |
+| Emacs' own `M-?`, unpacked            | 86 ms / 61    | 73 ms / 30          | 639 ms / 9 480   |
+| Emacs' own `M-?`, `.el.gz` as installed | 12 ms / 0   | 11 ms / 0           | 18 ms / 237      |
+| `zgrep`, `.el.gz` as installed        | 3.6 s / 100   | 3.5 s / 30          | 3.6 s / 18 230   |
+| Emacs' own `M-.` (not loaded)         | 1             | **0**               | 1                |
+
+On compressed sources, as Emacs installs them, its own `M-?` finds
+nothing and zgrep takes seconds; the database answers in milliseconds.
+grep also counts comments, docstrings and `string-trim-left`; the
+database counts uses in code. And it answers what grep cannot:
+callers after macro expansion, the methods of a generic, the texts of
+a library, counts over everything (the macros used most, over three
+million rows: 2.6 s).
 
 ## Manual
 

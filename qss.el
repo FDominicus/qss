@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.12.1
+;; Version: 0.12.2
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss

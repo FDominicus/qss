@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.12.1.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.12.2.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -41,6 +41,7 @@
 \code{run} & \code{qss-run} & Run PROGRAM with ARGS, without a shell, and return its output as a table. \\
 \code{sqlite} & \code{qss-sqlite} & Return the table TABLE of the SQLite file FILE as a query. \\
 \code{tables} & \code{qss-tables} & Return the tables of the SQLite file FILE (default \code{qss-database}). \\
+\code{xref} & \code{qss-xref-table} & The TABLE of the cross reference database, as a qss query. \\
 \bottomrule
 \end{longtable}
 \section{Options}\label{ref:options}
@@ -67,6 +68,8 @@ All options are in the customization group \code{qss} (\code{M-x customize-group
 \code{qss-repl-max-rows} & \code{30} & Maximum number of rows a table shows inside the qss REPL. \\
 \code{qss-repl-prompt} & \code{"qss\textgreater{} "} & Prompt of the qss REPL. \\
 \code{qss-sql-display-limit} & \code{1000} & Maximum number of rows a query fetches for display. \\
+\code{qss-xref-fallback} & \code{t} & Non-nil means: ask Emacs' own Elisp backend when the database knows nothing. \\
+\code{qss-xref-mode-hook} & \code{nil} & Hook run after entering or leaving \code{qss-xref-mode}. \\
 \bottomrule
 \end{longtable}
 \section{Faces}\label{ref:faces}

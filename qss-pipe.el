@@ -664,8 +664,10 @@ their keys, missing values last, as on SQLite."
        specs again))))
 
 (defun qss--group-stage (word args)
-  "Return the title stage of WORD with ARGS."
-  (format "%s %s" word (mapconcat (lambda (a) (format "%s" a)) args " ")))
+  "Return the title stage of WORD with ARGS (columns without the colon)."
+  (format "%s %s" word (mapconcat (lambda (a)
+                                    (if (keywordp a) (symbol-name (qss--name a)) (format "%s" a)))
+                                  args " ")))
 
 (cl-defgeneric qss-group-by (table &rest args)
   "Group the rows of TABLE by the columns in ARGS, with aggregates.
@@ -977,6 +979,11 @@ SOURCE is a table, a list, or a source from `qss-sources' such as
   (let ((acc `(qss-as-input ,(qss--expand-source source))))
     (dolist (stage stages acc)
       (setq acc (qss--expand-stage acc stage)))))
+
+(defmacro qss-display-> (source &rest stages)
+  "Pass SOURCE through the words STAGES, as `qss->', and show the result.
+Short for (qss-display (qss-> SOURCE STAGES...)); returns the buffer."
+  `(qss-display (qss-> ,source ,@stages)))
 
 ;;; ------------------------------------------------------------------
 ;;; Command

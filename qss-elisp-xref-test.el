@@ -12,6 +12,7 @@
 
 (require 'ert)
 (require 'qss-elisp-xref)
+(require 'qss-elisp-xref-commands)   ; the commands and the xref backend
 
 (defconst qss-xtest--source
   ";;; sample.el --- A sample  -*- lexical-binding: t -*-
@@ -242,6 +243,54 @@ Second line of the doc.\"
             ;; elsewhere plist rows keep their actions only
             (should-not (cdr (with-temp-buffer (qss-actions '(:name "x"))))))
         (mapc #'kill-buffer (seq-filter #'buffer-live-p buffers))))))
+
+(ert-deftest qss-xref-backend ()
+  "M-. M-? C-M-. through the database, and the fallback to the Elisp backend."
+  (require 'qss-elisp-xref-commands)
+  (qss-xtest--with-index db
+    (ignore db)
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (qss-xref-mode 1)
+      (should (eq (xref-find-backend) 'qss-xref))
+      (cl-flet ((where (item) (let ((loc (xref-item-location item)))
+                                (list (file-name-nondirectory (xref-location-group loc))
+                                      (xref-location-line loc)
+                                      (xref-file-location-column loc)))))
+        ;; M-.: the definition, with kind and arglist
+        (let ((defs (xref-backend-definitions 'qss-xref "sample-greet")))
+          (should (equal (mapcar #'xref-item-summary defs)
+                         '("(defun sample-greet (name &optional loud))")))
+          (should (equal (mapcar #'where defs) '(("sample.el" 12 0)))))
+        ;; a generic and its methods
+        (should (= 3 (length (xref-backend-definitions 'qss-xref "sample-size"))))
+        ;; M-?: every use but strings, with the line of the source as summary
+        (let ((refs (xref-backend-references 'qss-xref "sample-greet")))
+          (should (= 3 (length refs)))
+          (should (equal (car (mapcar #'where refs)) '("sample.el" 12 7)))
+          (should (string-prefix-p "(defun sample-greet" (xref-item-summary (car refs))))
+          (should (string-match-p "#'sample-greet" (xref-item-summary (nth 1 refs)))))
+        ;; C-M-.: all words must be in the name
+        (should (equal (delete-dups (mapcar #'xref-item-summary
+                                            (xref-backend-apropos 'qss-xref "sample size")))
+                       '("(cl-defgeneric sample-size (thing))"
+                         "(cl-defmethod sample-size ((thing string)))"
+                         "(cl-defmethod sample-size ((thing list)))")))
+        (should-not (xref-backend-apropos 'qss-xref "sample_size"))
+        ;; completion knows the defined names
+        (should (member "sample-twice" (xref-backend-identifier-completion-table 'qss-xref)))
+        ;; not in the database: Emacs' own backend answers, if wanted
+        (let ((qss-xref-fallback nil))
+          (should-not (xref-backend-definitions 'qss-xref "qss-xref-uses")))
+        (let ((qss-xref-fallback t))
+          (should (xref-backend-definitions 'qss-xref "qss-xref-uses"))))
+      (qss-xref-mode -1)
+      (should-not (eq (xref-find-backend) 'qss-xref)))))
+
+(ert-deftest qss-xref-command-map ()
+  (require 'qss-elisp-xref-commands)
+  (should (eq (keymap-lookup qss-xref-command-map "u") #'qss-xref-uses))
+  (should (eq (keymap-lookup qss-xref-command-map "d") #'qss-xref-definitions)))
 
 (ert-deftest qss-elisp-xref-database-follows-data-directory ()
   "Without a file of its own the database lies in `qss-data-directory'."
