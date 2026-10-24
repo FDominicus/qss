@@ -397,6 +397,10 @@ A group made on SQLite fetches them with a query of its own."
   "Keep the rows of TABLE that satisfy COND.
 COND is a `qss-condition' (from `qss->') or a function of a row.")
 
+(defalias 'qss-filter #'qss-where
+  "Keep the rows of TABLE that satisfy COND (another name of `qss-where').
+The word filter, as in Nushell; methods are defined on `qss-where'.")
+
 (cl-defmethod qss-where (table cond)
   "Filter the rows of TABLE in memory by COND."
   (let ((table (qss-as-table table))
@@ -941,7 +945,6 @@ A word may name its function in its `qss-word-function' property."
   "Return the function of WORD by the naming rule: qss-WORD."
   (pcase word
     ('columns 'qss-columns-of)
-    ('filter 'qss-where)
     (_ (intern (format "qss-%s" word)))))
 
 (defun qss--expand-source (form)

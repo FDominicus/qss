@@ -14,6 +14,8 @@
 (require 'ert)
 (require 'qss-pipe)
 
+(defvar qss-contract-enabled)           ; qss-contract.el; dynamic in the tests
+
 (defmacro qss-ptest--with-dir (var &rest body)
   "Bind VAR to a directory with files of known size, then run BODY."
   (declare (indent 1))
@@ -93,6 +95,16 @@
                    '("Bernd")))                   ; Clara: age NULL -> unknown
     (should (equal (qss-ptest--names (qss-> tab (where (or (> :age 100) (= :city "Bruchsal")))))
                    '("Anna" "Clara")))))
+
+(ert-deftest qss-filter-is-where ()
+  "The word filter and the function qss-filter are where."
+  (should (eq (qss--word-function 'filter) 'qss-filter))
+  (let ((tab (qss-make-table "people" qss-ptest--people)))
+    (should (equal (qss-ptest--names (qss-> tab (filter (> :age 30))))
+                   (qss-ptest--names (qss-> tab (where (> :age 30))))))
+    (should (equal (qss-ptest--names (qss-filter tab (lambda (r) (let ((age (plist-get r :age)))
+                                                                    (and age (> age 30))))))
+                   (qss-ptest--names (qss-> tab (where (> :age 30))))))))
 
 (ert-deftest qss-where-lisp-variables ()
   (let ((tab (qss-make-table "people" qss-ptest--people))

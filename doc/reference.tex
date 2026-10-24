@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.12.2.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.12.3.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -10,7 +10,7 @@
 \code{count} & \code{qss-count} & Return the number of rows of TABLE. \\
 \code{delete-rows} & \code{qss-delete-rows} & Delete the stored rows of TABLE, an SQLite query; return their number. \\
 \code{each} & \code{qss-each} & Call FN on every row of TABLE; the results are the new rows. \\
-\code{filter} & \code{qss-where} & Keep the rows of TABLE that satisfy COND. \\
+\code{filter} & \code{qss-filter} & Keep the rows of TABLE that satisfy COND (another name of \code{qss-where}). \\
 \code{first} & \code{qss-first} & Return the first N rows of TABLE (default 1). \\
 \code{get} & \code{qss-get} & Return the values of column COL of TABLE as a table with one column. \\
 \code{group-by} & \code{qss-group-by} & Group the rows of TABLE by the columns in ARGS, with aggregates. \\

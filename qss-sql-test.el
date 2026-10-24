@@ -479,5 +479,13 @@ The real central database is never touched."
           (should (= 1 (qss-count (qss-sqlite "one")))))
       (delete-directory dir t))))
 
+(ert-deftest qss-sql-filter-is-where ()
+  "filter runs as SQL, as where does."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let ((f (qss-> (sqlite (qss-demo-database) "Orders") (filter (is-null :status))))
+        (w (qss-> (sqlite (qss-demo-database) "Orders") (where (is-null :status)))))
+    (should (equal (qss-sql f) (qss-sql w)))
+    (should (equal (qss-> f (get :order-no) collect) (qss-> w (get :order-no) collect)))))
+
 (provide 'qss-sql-test)
 ;;; qss-sql-test.el ends here
