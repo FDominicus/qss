@@ -1,0 +1,12 @@
+(qss-define-command my-library-requires "Show what it requires"
+    ((library library "Library: "))
+  "Show the features LIBRARY requires, as a table."
+  (qss-display
+   (qss-make-table (format "requires of %s" (qss-presentation-label library))
+                   (with-temp-buffer
+                     (insert-file-contents (qss-file-name library))
+                     (let (found)
+                       (while (re-search-forward "^(require '\\([^) \n]+\\)" nil t)
+                         (push (list :feature (match-string 1)) found))
+                       (nreverse found)))
+                   '(feature))))

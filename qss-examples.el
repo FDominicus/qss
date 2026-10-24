@@ -152,9 +152,27 @@
             (get name)
             collect))
 
-    ("SQLite: orders per status (group-by runs in memory)"
-     ;; => paid 3, nil 2, cancelled 1
-     (qss-> (sqlite (qss-demo-database) "Orders") (group-by status) (sort-by count :desc)))
+    ("SQLite: orders per status, with the sum (GROUP BY)"
+     ;; => paid 3 245.5, nil 2 1299.99, cancelled 1 150.0
+     ;; RET on a group fetches its orders with a query of its own.
+     (qss-> (sqlite (qss-demo-database) "Orders")
+            (group-by status (sum amount))
+            (sort-by count :desc)))
+
+    ("SQLite: orders with the name of the customer (JOIN)"
+     (qss-> (sqlite (qss-demo-database) "Orders")
+            (join (sqlite (qss-demo-database) "Customers") :on customer-no)
+            (select order-no name city amount)))
+
+    ("SQLite: turnover per city, over a join (JOIN and GROUP BY in one query)"
+     (qss-> (sqlite (qss-demo-database) "Orders")
+            (join (sqlite (qss-demo-database) "Customers") :on customer-no)
+            (group-by city (sum amount) (max amount))
+            (sort-by sum-amount :desc)))
+
+    ("Summarize: all orders in one row"
+     (qss-> (sqlite (qss-demo-database) "Orders")
+            (summarize (sum amount) (avg amount) (min order-date) (max order-date))))
 
     ("Using the rows in Lisp: the total of the paid orders"
      ;; => 245.5

@@ -230,5 +230,23 @@ Long texts are cut without vtable measuring them."
           (should (< (- (float-time) start) 3.0))
         (kill-buffer)))))
 
+(ert-deftest qss-table-ret-opens-at-line-and-column ()
+  (let ((file (make-temp-file "qss-place-" nil ".txt" "one\ntwo words\nthree\n")))
+    (unwind-protect
+        (progn
+          (qss-default-action (list :path file :line 2 :col 4))
+          (should (equal (buffer-file-name) file))
+          (should (= 2 (line-number-at-pos)))
+          (should (looking-at "words"))
+          ;; a column past the end of the line stays on the line
+          (qss-default-action (list :path file :line 3 :col 99))
+          (should (= 3 (line-number-at-pos)))
+          (should (eolp))
+          ;; :start-line, as in forms, and no column
+          (qss-default-action (list :path file :start-line 1))
+          (should (bobp)))
+      (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (provide 'qss-table-test)
 ;;; qss-table-test.el ends here

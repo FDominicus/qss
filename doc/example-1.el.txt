@@ -1,0 +1,3 @@
+(cl-defstruct (my-library (:constructor my-library--make) (:copier nil))
+  "An Emacs Lisp library: its NAME (without .el), its PATH and SIZE."
+  name path size)

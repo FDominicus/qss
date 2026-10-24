@@ -50,7 +50,9 @@ qss> | (sort-by size :desc)
 | `[buffer]` | show the table in a buffer of its own |
 
 In a table buffer `RET`, `a`, `w` and `S` work the same, and `g` reads
-the source again.
+the source again. A table buffer of an SQLite table can be edited: `e`
+changes a cell, `d` marks a row for deletion, `C-c C-c` writes (see
+[Changing rows](#changing-rows)).
 
 ### Actions at point
 
@@ -62,6 +64,7 @@ the source again.
   `(where (is-null :city))` for an empty cell, for a time the day:
   `(where (and (>= :modified "2026-10-22") (< :modified "2026-10-23")))`;
   then `(sort-by COL)`, `(sort-by COL :desc)`, `(group-by COL)`,
+  changing the cell (in an editable SQLite table),
   `(select COL)`, `(reject COL)` and copying the value;
 - copying the whole table as text, Org, Markdown, CSV or TSV.
 
@@ -189,7 +192,11 @@ else works.
 | `(sort-by COL [:desc])` | sort; missing values last |
 | `(first [N])` / `(last [N])` | the first / last N rows |
 | `(get COL)` | the values of one column |
-| `(group-by COL)` | one row per value with a count; `RET` shows the group |
+| `(group-by COL... AGG...)` | one row per group: the keys, `count` and aggregates such as `(sum amount)`; `RET` shows the group |
+| `(summarize AGG...)` | one row: `count` and the aggregates over all rows |
+| `(join TABLE :on COL)` | rows of both tables whose columns match, side by side |
+| `(update-rows :COL VALUE ...)` | change the stored rows of an SQLite query (see [Changing rows](#changing-rows)) |
+| `(delete-rows)` | delete the stored rows of an SQLite query |
 | `(each FORM)` | FORM with `it` bound to each row; results are the new rows |
 | `(nu COMMAND)` | the table through a Nushell command (see above) |
 | `(to FORMAT)` | the table as text: `text`, `org`, `md`, `csv`, `tsv` |
@@ -200,6 +207,36 @@ else works.
 | `sql` | the SQL of a query (SQLite only) |
 
 `collect` after `get` returns the plain values.
+
+### Groups and joins
+
+```
+qss> (sqlite (qss-demo-database) "Orders") (group-by status (sum amount) (max order-date))
+status     count  sum-amount  max-order-date
+cancelled      1       150.0  2026-10-12
+paid           3       245.5  2026-10-02
+               2     1299.99  2026-10-05
+qss> (sqlite (qss-demo-database) "Orders") (summarize (sum amount) (avg amount))
+```
+
+Aggregates are `(sum COL)`, `(avg COL)`, `(min COL)`, `(max COL)` and
+`(count COL)` (the values present), each named `sum-amount` and so on,
+or as told: `(sum amount :as total)`. As in SQL, missing values are left
+out. Groups are sorted by their keys, missing values last — in memory
+and on SQLite alike. A sum or average of sizes is a size again.
+
+```
+qss> (sqlite (qss-demo-database) "Orders")
+       (join (sqlite (qss-demo-database) "Customers") :on customer-no)
+       (group-by city (sum amount))
+```
+
+`join` takes the other table as a source like any other, and options:
+`:on COL` (the same name on both sides), `:on (LEFT RIGHT)` (different
+names), `:on ((L1 R1) (L2 R2))`; without `:on`, all columns both have.
+`:kind left` keeps the rows without a partner. A column both sides have
+appears once if it is joined on, otherwise the right one gets `-2`
+(`status-2`). Missing values never match. The rows of a join are data.
 
 `(to text)`, `(to org)` and `(to md)` are aligned and show the cells as
 the table does (`9.8k`, `2026-10-22 14:40`); `(to csv)` and `(to tsv)`
@@ -250,10 +287,13 @@ qss> (tables (qss-demo-database))
 ```
 
 On an SQLite source the pipe stays a query until the rows are needed.
-`where`, `sort-by`, `first`, `count`, `select`, `reject` and `columns`
+`where`, `sort-by`, `first`, `count`, `select`, `reject`, `columns`,
+`group-by`, `summarize` and `join` (with a query of the same file)
 become SQL with `?` parameters; a word that cannot (a condition with
-`it`, `each`, `group-by`, `last`, `get`) fetches the rows and goes on in
-memory.
+`it`, `each`, `last`, `get`) fetches the rows and goes on in memory.
+After `group-by`, `where` works on the aggregates and is SQL too (what
+SQL calls HAVING); `RET` on a group fetches its rows with a query of its
+own.
 
 ```
 qss> (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (sort-by order-date :desc) (first 20) sql
@@ -298,6 +338,38 @@ qss> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
 - A file row also stores its `path`, so `RET` on the stored row opens
   the file (or enters the directory in the REPL). Other row types can
   name fields to store with the generic `qss-stored-fields`.
+
+### Changing rows
+
+SQLite is a file to work in, not only to read. In a table buffer of an
+SQLite table (`[buffer]` after a table in the REPL):
+
+| Key | |
+|---|---|
+| `e` | change the cell at point; `C-u e` makes it empty (NULL) |
+| `d` | mark the row for deletion (again: unmark) |
+| `u` | forget the changes of the row |
+| `C-c C-c` | write all changes, in one transaction |
+| `C-c C-k` | forget all changes |
+
+Changes are shown where they are made — changed cells highlighted,
+deleted rows struck through, a count in the mode line — and written only
+by `C-c C-c`, all or nothing. `g` and killing the buffer ask while there
+are changes. `a` offers the same.
+
+For many rows at once there are two words; they return how many rows
+they changed:
+
+```
+qss> (sqlite "big-files") (where (> :size "1gb")) (update-rows :note "archive")
+qss> (sqlite (qss-demo-database) "Orders") (where (= :status "cancelled")) (delete-rows)
+```
+
+Only the rows of the query change: its `where`, `first` and `sort-by`
+count. Without a `where` or `first` they refuse to touch every row,
+unless `:all-rows t` says so. Rows are found by their rowid, so only
+queries straight on a table can be changed — not views, joins or
+groups.
 
 Column and table names become keys mechanically: `OrderDate` →
 `order-date`, `HT_Orders` → `ht-orders`, `Straße` → `strasse`.
@@ -599,6 +671,76 @@ be used for any Emacs Lisp:
 (qss-define-contract-type 'my-weight '(and/c numberp (lambda (w) (>= w 0))))
 (qss-define-contract my-tare (-> my-weight my-weight my-weight))
 ```
+
+## A cross reference of Emacs Lisp
+
+`qss-elisp-xref.el` stands on its own (it needs only Emacs 29 with
+SQLite) and makes a database of all Emacs Lisp it finds: the Lisp of
+Emacs itself and the packages in `package-user-dir`.
+
+```
+M-x qss-elisp-xref-index        ; in an Emacs of its own, in the background
+```
+
+or from a shell:
+
+```
+emacs --batch -L /path/to/qss -l qss-elisp-xref -f qss-elisp-xref-batch [DIR...]
+emacs --batch -L /path/to/qss -l qss-elisp-xref -f qss-elisp-xref-calls-batch
+```
+
+The first step only reads: the Lisp reader with the position of every
+symbol (`read-positioning-symbols`). Nothing is loaded or run. The
+second step compiles every file into a directory thrown away and keeps
+what the byte compiler saw as calls. A second run reads only the files
+that changed.
+
+The tables, in `~/.emacs.d/elisp-xref.sqlite3`:
+
+| table         | one row per                                                          |
+|---------------|----------------------------------------------------------------------|
+| `files`       | file: library, origin (emacs, elpa, user), package, Commentary, sha1 |
+| `forms`       | top-level form, with its source text and lines                       |
+| `definitions` | defun, defmacro, defvar, cl-defmethod, local cl-labels …: arglist, whole docstring |
+| `occurrences` | symbol and string (not docstrings) with line, column, context, the function around it (`parent_head`) and its argument place (`arg_index`) |
+| `calls`       | caller and callee after macro expansion                              |
+
+The context of a symbol tells what it is there: `head`, `macro-use`,
+`special-form`, `function` (`#'f`), `quoted`, `defining`, `parameter`,
+`binding`, `other`, or `string`. The strings with their `parent_head`
+are all the texts the program shows to people — a start for
+translations, or for a look at how messages are written:
+
+```elisp
+(let ((db "~/.emacs.d/elisp-xref.sqlite3"))
+  (qss-> (sqlite db "occurrences")
+         (where (and (= :context "string") (= :parent-head "user-error")))
+         (join (sqlite db "files") :on (file-id id))
+         (group-by library) (sort-by count :desc)))
+```
+
+`qss-elisp-xref-queries.el` has more questions, one form each, to try
+with `C-x C-e`.
+
+Over the Lisp of Emacs 29.3 (1598 files, 100 000 forms, 2.8 million
+occurrences, 380 MB) reading takes about seven minutes, compiling about
+two; the queries above run in SQLite and take well under a second.
+
+## Manual
+
+`doc/qss-manual.pdf` is a short manual (about 25 pages): the ideas and
+how they fit together, presentations and accept in detail, contracts,
+a complete row type of one's own, and a reference written from the
+code. Build it with `M-x qss-manual-build` (load
+`doc/qss-manual-reference.el` first) or by hand:
+
+```
+cd doc
+emacs --batch -L .. -L . -l qss-manual-reference.el -f qss-manual-write-reference
+lualatex qss-manual.tex && lualatex qss-manual.tex
+```
+
+It needs LuaLaTeX with KOMA-Script and the font DejaVu Sans Mono.
 
 ## Examples
 

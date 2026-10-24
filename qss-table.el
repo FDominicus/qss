@@ -25,6 +25,8 @@
 ;;   a     the actions of the row, words with the value at point,
 ;;         copying the table (also on the right mouse button)
 ;;   w     copy the table as text (`qss-copy-format')
+;;   e d u change a cell, mark a row for deletion, undo (SQLite tables;
+;;         C-c C-c writes, C-c C-k forgets; see qss-edit.el)
 ;;   g     read the source again
 ;;   S     sort by the column at point (vtable)
 ;;   q     quit the window
@@ -160,13 +162,29 @@ Nushell, in the directory ls ran in."
              (expand-file-name name (or (and (boundp 'qss-nu--dirs) (gethash row qss-nu--dirs))
                                         default-directory)))))))
 
+(defun qss--goto-row-place (row)
+  "Move point to the place ROW names in the current buffer, if any.
+The line is the field :line or :start-line (counted from 1), the column
+the field :col (characters from the start of the line, from 0)."
+  (let ((line (or (plist-get row :line) (plist-get row :start-line)))
+        (col (plist-get row :col)))
+    (when (natnump line)
+      (widen)
+      (goto-char (point-min))
+      (forward-line (1- (max line 1)))
+      (when (natnump col)
+        (forward-char (min col (- (line-end-position) (point))))))))
+
 (cl-defmethod qss-default-action ((row cons))
   "Open the file ROW names (see `qss--row-path').
-A directory is shown as a table; otherwise ROW is described."
+A directory is shown as a table; a file is opened at the line and
+column of ROW, if it has them (see `qss--goto-row-place'); a row
+without a file is described."
   (let ((path (qss--row-path row)))
     (cond ((null path) (cl-call-next-method))
           ((file-directory-p path) (qss-show (qss-files path)))
-          (t (find-file path)))))
+          (t (find-file path)
+             (qss--goto-row-place row)))))
 
 ;;; ------------------------------------------------------------------
 ;;; Columns and display
@@ -385,6 +403,9 @@ every text in full (command lines with tens of thousands of characters)."
 (autoload 'qss-action-at-point "qss-menu" nil t)
 (autoload 'qss-context-menu "qss-menu" nil t)
 (autoload 'qss-copy-table "qss-menu" nil t)
+(autoload 'qss-edit-cell "qss-edit" nil t)
+(autoload 'qss-edit-toggle-delete "qss-edit" nil t)
+(autoload 'qss-edit-undo-row "qss-edit" nil t)
 
 (defvar-local qss--whole-tables nil
   "Weak hash table: vtable -> the whole table or query it shows.
@@ -401,6 +422,10 @@ menu and \\`w' work on the whole.")
   (let ((map (define-keymap
                "a" #'qss-action-at-point
                "w" #'qss-copy-table
+               ;; changing rows of SQLite tables (qss-edit.el)
+               "e" #'qss-edit-cell
+               "d" #'qss-edit-toggle-delete
+               "u" #'qss-edit-undo-row
                ;; The menu opens when the button is released: on a terminal
                ;; the release would otherwise choose the item under the
                ;; mouse.  Pressing does nothing, also with `context-menu-mode'.
@@ -465,6 +490,7 @@ of the menu continue the query, not the rows."
   (let ((source (and qss--table (qss-table-source qss--table)))
         (line (line-number-at-pos)))
     (unless source (user-error "This table has no source"))
+    (when (fboundp 'qss-edit--before-refresh) (qss-edit--before-refresh))
     (setq qss--table (funcall source))
     (qss--insert-table qss--table)
     (goto-char (point-min))

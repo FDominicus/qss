@@ -1,0 +1,851 @@
+% qss-manual.tex --- A short manual for qss
+%
+% Copyright (C) 2026 Friedrich Dominicus
+% SPDX-License-Identifier: MIT
+%
+% Build with LuaLaTeX (twice), or from Emacs: M-x qss-manual-build
+% (doc/qss-manual-reference.el), which first writes reference.tex from
+% the code.
+
+\documentclass[
+  paper=a4, fontsize=11pt, parskip=half, headings=small,
+  toc=bibliography, numbers=noenddot, DIV=12
+]{scrreprt}
+
+\usepackage{fontspec}
+\setmonofont{DejaVu Sans Mono}[Scale=MatchLowercase]
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage[autostyle]{csquotes}
+\usepackage{xcolor}
+\usepackage{booktabs, longtable, array, tabularx}
+\usepackage{fancyvrb}
+\usepackage{listings}
+\usepackage[automark]{scrlayer-scrpage}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{qssframe}{gray}{0.75}
+\definecolor{qssback}{gray}{0.96}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\texttt{#1}}
+\newcommand{\kbd}[1]{\texttt{#1}}
+\newcommand{\qss}{\textsf{qss}}
+
+\fvset{fontsize=\small, frame=leftline, framerule=1.5pt, rulecolor=\color{qssframe},
+       xleftmargin=1em, framesep=0.8em}
+
+\lstdefinestyle{elisp}{
+  language=Lisp, basicstyle=\ttfamily\small, columns=fullflexible, keepspaces=true,
+  upquote=true, showstringspaces=false, frame=leftline, framerule=1.5pt,
+  rulecolor=\color{qssframe}, xleftmargin=1em, framesep=0.8em,
+  commentstyle=\color{black!60}, keywordstyle={}, ndkeywordstyle={},
+}
+\lstset{style=elisp}
+
+\pagestyle{scrheadings}
+\KOMAoptions{headsepline=true}
+
+\title{qss}
+\subtitle{Tables, one vocabulary, presentations and contracts for Emacs\\[1ex]
+  \normalsize A short manual}
+\author{Friedrich Dominicus}
+\input{version}
+\date{Version \qssversion}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+% ======================================================================
+\chapter{Introduction}
+
+\qss{} brings the idea of Nushell to Emacs: data as tables, and one small
+vocabulary that works on all of them --- files, processes, lists of property
+lists, rows of an SQLite table, and whatever Nushell itself produces. Around
+this idea are a few others, older ones:
+
+\begin{itemize}
+\item on SQLite the words become SQL, as in dbplyr, and SQLite is both
+  source and store;
+\item what is shown stays the object it shows and can be pointed at later, as
+  in CLIM: \emph{presentations} and \emph{accept};
+\item the public interface is checked by \emph{contracts} with blame, as in
+  Racket.
+\end{itemize}
+
+Everything is Emacs Lisp and runs inside Emacs (29.1 or later). Only what is
+built into Emacs is used: \code{vtable}, \code{sqlite}, \code{cl-generic} and
+advice.
+
+This manual explains the ideas and how they fit together. The README of the
+package is the short version; the docstrings (\kbd{C-h f}) are the detailed
+one. The reference in chapter~\ref{chap:reference} is written from the code
+itself.
+
+\section{Installation}
+
+\begin{lstlisting}
+(package-vc-install "https://github.com/FDominicus/qss")
+(require 'qss)
+\end{lstlisting}
+
+Or put the directory on \code{load-path} and \code{(require 'qss)}. Nushell is
+optional; without it everything else works.
+
+\section{A first session}
+
+\kbd{M-x qss} opens the REPL. Type a pipe, press \kbd{RET}, and the table
+appears right below:
+
+\begin{Verbatim}
+~/ qss> (files "~") (where (> :size "10mb")) (sort-by size :desc) (first 5)
+5 rows  [buffer]  files ~/ | where (> :size "10mb") | sort-by size desc | first 5
+name                 type  size modified         mode       user
+lisp.virtualmem      file   11M 2026-06-01 14:35 -rw-rw-r-- frido
+...
+~/ qss> (select name size)
+\end{Verbatim}
+
+The second line starts with a word, so it continues the table above. The title
+line repeats every stage of the pipe, so you always see how a table came about.
+\kbd{RET} on a row opens the file, \kbd{a} offers what can be done with it, and
+\code{(sqlite (qss-demo-database) "Orders")} gives a small database to try the
+SQL part with.
+
+% ======================================================================
+\chapter{Tables and rows}
+
+\section{A table is a value}
+
+A table (\code{qss-table}) is a title, a list of columns, a list of rows and,
+optionally, a way to build it again. It is an ordinary Lisp value: it can be
+stored in a variable, passed on, shown.
+
+The rows are \emph{not} turned into strings or records of strings. A row of
+\code{(files)} is a \code{qss-file}, a row of \code{(processes)} a
+\code{qss-process}, a row from SQLite a property list. The table only knows how
+to ask a row for its fields. That is why a filtered file still opens with
+\kbd{RET}, and why the same words work on all of them.
+
+\section{The protocol of rows}
+
+What a row is, is said by a few generic functions, with a method per type of
+row:
+
+\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\code{qss-columns} & the columns shown for a row \\
+\code{qss-field} & the raw value of a field (filtering and sorting use it) \\
+\code{qss-default-action} & what \kbd{RET} does \\
+\code{qss-actions} & what \kbd{a} offers: a list of (\emph{label} . \emph{function}) \\
+\code{qss-stored-fields} & fields stored by \code{into} besides the columns \\
+\code{qss-presentation-type} & the type for \code{qss-accept} (chapter~\ref{chap:present}) \\
+\code{qss-presentation-label} & a short text for it \\
+\code{qss-file-name} & the file a row stands for, if any \\
+\bottomrule
+\end{tabularx}
+
+Property lists and alists have methods already, so any list of property lists
+is a table:
+
+\begin{lstlisting}
+(qss-> '((:name "Ada" :born 1815) (:name "Grace" :born 1906))
+       (where (< :born 1900))
+       collect)
+;; => ((:name "Ada" :born 1815))
+\end{lstlisting}
+
+\section{Columns}
+
+A column is a field name, or \code{(\emph{name} . \emph{plist})} with
+\code{:type} (\code{number}, \code{size}, \code{duration}, \code{time}),
+\code{:format}, \code{:align} and \code{:width}. The type decides display,
+alignment and sorting: a \code{size} is bytes shown as \code{9.8k}, a
+\code{duration} nanoseconds shown as \code{3hr 20min}, a \code{time} a Lisp time
+shown as \code{2026-10-22 14:40}.
+
+% ======================================================================
+\chapter{The vocabulary}
+
+\section{Sources and words}
+
+A pipe begins with a source and goes on with words:
+
+\begin{lstlisting}
+(qss-> (sqlite (qss-demo-database) "Orders")
+       (where (> :amount 100))
+       (sort-by order-date :desc)
+       (select order-no amount)
+       collect)
+\end{lstlisting}
+
+In the REPL and in \kbd{M-x qss-eval} the same is written without \code{qss->}.
+The sources are \code{files}, \code{processes}, \code{run}, \code{sqlite},
+\code{tables}, \code{nu} and \code{contracts}; any list is one too. The words:
+
+\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\code{(where \emph{cond})} & rows for which the condition holds (\code{filter} is the same) \\
+\code{(select \emph{col}\ldots)}, \code{(reject \emph{col}\ldots)} & keep, drop columns \\
+\code{(sort-by \emph{col} [:desc])} & sort; missing values last \\
+\code{(first [\emph{n}])}, \code{(last [\emph{n}])} & the first, last rows \\
+\code{(get \emph{col})} & the values of one column \\
+\code{(group-by \emph{col}\ldots{} \emph{agg}\ldots)} & one row per group: keys, count, aggregates; \kbd{RET} shows the group \\
+\code{(summarize \emph{agg}\ldots)} & one row: count and aggregates over all rows \\
+\code{(join \emph{table} :on \emph{col})} & rows of both tables whose columns match \\
+\code{(update-rows :\emph{col} \emph{v}\ldots)}, \code{(delete-rows)} & change, delete stored rows (section~\ref{sec:changing}) \\
+\code{(each \emph{form})} & \emph{form} with \code{it} bound to each row; the results are the new rows \\
+\code{(nu \emph{command})} & the table through Nushell (section~\ref{sec:nushell}) \\
+\code{(to \emph{format})} & the table as text: \code{text}, \code{org}, \code{md}, \code{csv}, \code{tsv} \\
+\code{(into sqlite \emph{name} \ldots)} & store the table (section~\ref{sec:into}) \\
+\code{columns}, \code{count}, \code{collect}, \code{sql} & column names, number of rows, the rows as a list, the SQL \\
+\bottomrule
+\end{tabularx}
+
+Every word returns a table again (or a query, on SQLite), except
+\code{count}, \code{collect}, \code{to} and \code{sql}. A derived table knows
+its way back to the source: \kbd{g} in its buffer reads the source again and
+applies the words once more.
+
+\section{Groups and joins}
+
+\begin{Verbatim}
+qss> (sqlite (qss-demo-database) "Orders") (group-by status (sum amount) (max order-date))
+status     count  sum-amount  max-order-date
+cancelled      1       150.0  2026-10-12
+paid           3       245.5  2026-10-02
+               2     1299.99  2026-10-05
+\end{Verbatim}
+
+\code{group-by} takes the columns to group by and any number of aggregates:
+\code{(sum \emph{col})}, \code{(avg \emph{col})}, \code{(min \emph{col})},
+\code{(max \emph{col})} and \code{(count \emph{col})}, the number of values
+present. They are named \code{sum-amount} and so on, or as told:
+\code{(sum amount :as total)}. \code{count}, the number of rows, is always
+there. As in SQL, missing values are left out of the aggregates. The groups are
+sorted by their keys, missing values last, in memory and on SQLite alike; a sum
+or average of sizes is a size again. \kbd{RET} on a group shows its rows.
+\code{summarize} is the same without groups: one row over all rows (also over
+none: then the count is 0).
+
+\code{join} puts the rows of two tables side by side where their columns match:
+
+\begin{Verbatim}
+qss> (sqlite (qss-demo-database) "Orders")
+       (join (sqlite (qss-demo-database) "Customers") :on customer-no)
+       (group-by city (sum amount)) (sort-by sum-amount :desc)
+\end{Verbatim}
+
+The other table is written as a source, like the start of a pipe. \code{:on}
+names the column (the same on both sides), a pair \code{(\emph{left}
+\emph{right})} for different names, or a list of pairs; without \code{:on},
+all columns both tables have. \code{:kind left} keeps the rows of the left
+table without a partner. A column both sides have appears once if it is joined
+on; otherwise the right one gets the suffix \code{-2}. Missing values never
+match, as in SQL. The rows of a join are data (property lists). The options are
+data like column names: in a pipe they are not evaluated.
+
+\section{Conditions}
+
+Columns are keywords; everything else is Lisp, variables included:
+
+\begin{lstlisting}
+(where (> :size 10000))
+(where (and (>= :date since) (in :kind kinds)))
+(where (like :name "%.el"))
+(where (is-null :invoice-no))
+\end{lstlisting}
+
+The comparisons mean what they mean in SQL. \code{=}, \code{<} \ldots{} work on
+numbers, strings and times (\code{(> :modified "2026-10-20")} works); sizes and
+durations can be written as in Nushell (\code{(> :size "10kb")},
+\code{(< :took "1hr")}); \code{like} ignores case; and a missing value is NULL:
+comparing with it is \emph{unknown}, neither true nor false, and \code{where}
+keeps only what is true. So \code{(not (= :city "Bruchsal"))} does not keep
+rows without a city --- in memory exactly as in SQLite.
+
+If the symbol \code{it} occurs, the condition is ordinary Lisp with \code{it}
+bound to the row object:
+
+\begin{lstlisting}
+(where (string-prefix-p "." (qss-field it 'name)))
+\end{lstlisting}
+
+% ======================================================================
+\chapter{The REPL}
+
+\section{Input}
+
+\begin{itemize}
+\item Several forms, or one form beginning with a source, are a pipe.
+\item A form beginning with a word continues the last table, like \code{\$in}
+  in Nushell; so does a line beginning with \code{|}.
+\item Anything else is Lisp. The last table is in the variable
+  \code{qss-last}.
+\item \code{!\emph{program} \emph{args}} runs a program directly, without a
+  shell; its output is shown and is also the last table (one row per line, in
+  the column \code{line}).
+\item \code{cd \emph{dir}} changes the directory; the prompt shows it, and
+  \code{files}, \code{nu}, \code{run} and \code{!} run there --- on the remote
+  host in a TRAMP directory.
+\end{itemize}
+
+\begin{Verbatim}
+~/ qss> cd ~/src/project
+~/src/project/ qss> !git log --oneline -20
+~/src/project/ qss> (where (like :line "%fix%"))
+~/src/project/ qss> | (nu "length")
+\end{Verbatim}
+
+\section{Keys}
+
+\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\kbd{RET} & on the input: run it; on a row: its default action (a directory: \code{cd} there) \\
+\kbd{a}, right mouse button & the actions at point (chapter~\ref{chap:actions}) \\
+\kbd{w} & copy the whole table as text; \kbd{C-u w} asks for the format \\
+\kbd{S} & sort by the column at point \\
+\kbd{e}, \kbd{d}, \kbd{u} & in a table buffer of an SQLite table: change a cell, mark a row for deletion, undo (section~\ref{sec:changing}) \\
+\kbd{C-c C-v} & take a value from a table into the input, by a click \\
+\kbd{C-c C-f} & take the name of a file into the input \\
+\kbd{M-p}, \kbd{M-n} & history \\
+\kbd{TAB} & complete words, sources, column names, file names \\
+\kbd{C-c M-o} & clear the buffer \\
+\code{[buffer]} & the table in a buffer of its own, where \kbd{g} reads it again \\
+\bottomrule
+\end{tabularx}
+
+Long tables show the first \code{qss-repl-max-rows} rows and a
+\code{[show all]} button.
+
+% ======================================================================
+\chapter{Actions at point}\label{chap:actions}
+
+\kbd{a}, or the right mouse button, on a cell offers four groups:
+
+\begin{enumerate}
+\item the actions of the row object --- open the file, Dired, kill the
+  process \ldots{} (\code{qss-actions});
+\item words with the value under point: \code{(where (= :status "paid"))},
+  \code{(where (/= \ldots))}, \code{(where (> :amount 120.0))} for numbers,
+  \code{(where (is-null :city))} for an empty cell, the day for a time;
+  then \code{sort-by}, \code{group-by}, \code{select} and \code{reject} on that
+  column, and copying the value;
+\item commands with typed arguments whose first argument fits the row or the
+  value (section~\ref{sec:commands});
+\item copying the whole table as text, Org, Markdown, CSV or TSV.
+\end{enumerate}
+
+A word continues the \emph{whole} table, not only the rows the REPL shows, and on
+SQLite it continues the query, so the condition becomes SQL. In the REPL the
+word is submitted as the next input --- visible and in the history --- and it
+continues the table that was clicked, even an older one; what you had typed at
+the prompt stays. In a table buffer the result opens in a buffer of its own.
+
+\code{(to org)} and \kbd{w} show the cells as the table does (\code{9.8k});
+\code{(to csv)} and \code{(to tsv)} carry the plain values for other programs:
+sizes in bytes, durations in nanoseconds, times with seconds.
+
+% ======================================================================
+\chapter{SQLite}
+
+\section{Queries}
+
+On an SQLite source the pipe stays a query until the rows are needed.
+\code{where}, \code{sort-by}, \code{first}, \code{count}, \code{select},
+\code{reject}, \code{columns}, \code{group-by}, \code{summarize} and
+\code{join} (with a query of the same file) become SQL with \code{?}
+parameters; a word that cannot (a condition with \code{it}, \code{each},
+\code{last}, \code{get}) fetches the rows and goes on in memory. After
+\code{group-by}, a \code{where} on the aggregates is SQL too (what SQL calls
+HAVING), and \kbd{RET} on a group fetches its rows with a query of its own.
+
+\begin{Verbatim}
+qss> (sqlite (qss-demo-database) "Orders") (where (> :amount 100))
+       (sort-by order-date :desc) (first 20) sql
+SELECT *
+FROM "Orders"
+WHERE ("Amount" > ?)
+ORDER BY "OrderDate" IS NULL, "OrderDate" DESC
+LIMIT ?
+Parameters: (100 20)
+\end{Verbatim}
+
+Values never become text in the SQL. Column and table names become keys
+mechanically, never by translation: \code{OrderDate} $\to$ \code{order-date},
+\code{HT\_Orders} $\to$ \code{ht-orders}, \code{Straße} $\to$ \code{strasse}; the
+way back is looked up in the schema. \code{"10kb"} works in SQL too: for
+\code{<}, \code{>}, \code{<=}, \code{>=} on every column without a text type,
+for \code{=}, \code{/=}, \code{in} only on numeric columns --- so that SQL
+returns the same rows as memory.
+
+\section{Storing: \texttt{into}}\label{sec:into}
+
+\code{into} is the way back. The table of a pipe goes into SQLite and comes out
+as a query, so the words go on there.
+
+\begin{Verbatim}
+qss> (files "~") (where (> :size "10mb")) (into sqlite "big-files")
+qss> (sqlite "big-files") (where (> :modified "2026-01-01"))
+qss> (nu "sys disks") (into sqlite "disks" :append)
+\end{Verbatim}
+
+\begin{itemize}
+\item Without \code{:file} the table goes into the central file
+  \code{qss-database}; \code{(sqlite "big-files")} and \code{(tables)} read
+  from there.
+\item An existing table is not touched unless \code{:replace} or
+  \code{:append} says so. All in one transaction.
+\item Sizes and durations are stored as INTEGER (bytes, nanoseconds), times as
+  ISO text \code{2026-10-22 07:11:05} (\code{qss-time-format}); the types of
+  \qss{} are recorded in a table \code{\_qss\_columns}, so sizes show as
+  \code{9.8k} again.
+\item A file keeps its path, so \kbd{RET} on the stored row opens the file;
+  other row types name the fields to keep with \code{qss-stored-fields}.
+\end{itemize}
+
+\section{Changing rows}\label{sec:changing}
+
+SQLite is a file to work in, not only to read. A table buffer of an SQLite table
+(\code{[buffer]} after a table in the REPL) can be edited:
+
+\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\kbd{e} & change the cell at point; \kbd{C-u e} makes it empty (NULL) \\
+\kbd{d} & mark the row for deletion (again: unmark) \\
+\kbd{u} & forget the changes of the row \\
+\kbd{C-c C-c} & write all changes, in one transaction \\
+\kbd{C-c C-k} & forget all changes \\
+\bottomrule
+\end{tabularx}
+
+The changes are shown where they are made --- changed cells highlighted, deleted
+rows struck through, a count in the mode line --- and written only by
+\kbd{C-c C-c}, all or nothing: if one row cannot be written (someone deleted it
+meanwhile), none is. \kbd{g} and killing the buffer ask while there are
+changes. A numeric column takes numbers, also \code{"10kb"} and \code{"3hr"};
+empty input there means NULL.
+
+For many rows at once there are two words; they return how many rows they
+changed:
+
+\begin{Verbatim}
+qss> (sqlite "big-files") (where (> :size "1gb")) (update-rows :note "archive")
+qss> (sqlite (qss-demo-database) "Orders") (where (= :status "cancelled")) (delete-rows)
+\end{Verbatim}
+
+Only the rows of the query change: its \code{where}, \code{first} and
+\code{sort-by} count. Without \code{where} or \code{first} the words refuse to
+touch every row, unless \code{:all-rows t} says so. The values are Lisp and
+evaluated.
+
+Rows are found by their rowid. So only queries straight on a table can be
+changed --- not views, joins or groups; \qss{} says so instead of guessing.
+
+% ======================================================================
+\chapter{Nushell}\label{sec:nushell}
+
+\code{(nu \emph{command})} is a source: Nushell runs the command in
+\code{default-directory} and the result becomes a table. In the middle of a pipe
+\code{nu} works the other way round as well: the table so far goes to Nushell as
+\code{\$in}, and what comes back is a table again (or a single value).
+
+\begin{Verbatim}
+qss> (nu "ps | where cpu > 5")
+qss> (nu "open export.csv") (where (> :amount 100)) (sort-by date :desc)
+qss> (files) (nu "where size > 10kb | get size | math sum")
+qss> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
+       (nu "to csv | save -f open-orders.csv")
+\end{Verbatim}
+
+Both ways use NUON, Nushell's own format, which \qss{} reads and writes itself
+(\file{qss-nuon.el}). Unlike JSON it keeps the types: file sizes, durations and
+datetimes arrive as columns of the types \code{size}, \code{duration} and
+\code{time}, and go back to Nushell as such, so \code{where size > 10kb} works
+on a table from Emacs.
+
+% ======================================================================
+\chapter{Presentations and accept}\label{chap:present}
+
+\section{The idea}
+
+The idea comes from CLIM, the Common Lisp Interface Manager, and from Dynamic
+Windows on the Symbolics Lisp machines before it: \emph{output remembers what it
+shows}, so it can serve as input later. In a CLIM listener you type a command,
+and where it wants a file you click a file that some earlier output printed;
+the program receives the file object, not its name as text.
+
+\qss{} does the same in Emacs buffers. A buffer is the store: whatever is
+shown in a visible window can be chosen.
+
+\section{Presentations}
+
+A \emph{presentation} is a piece of text together with an object and a
+\emph{presentation type}.
+
+\begin{itemize}
+\item Every \textbf{row} of a table is a presentation of its row object: a file
+  row of its \code{qss-file} (type \code{file}, or \code{directory}), a process
+  row of its process, a row of \code{tables} of a \code{db-table}, a row of data
+  of a \code{row} --- or of a \code{file}, if it has a \code{path}.
+\item Every \textbf{cell} is a presentation of its value: \code{size},
+  \code{duration} and \code{time} from the type of the column, otherwise from
+  the value (\code{integer}, \code{number}, \code{string}, \code{time},
+  \code{symbol}). Empty cells are none.
+\item What the \textbf{REPL prints} --- a number, a line of text, a time --- is
+  one too.
+\item \textbf{Any text in any buffer}, made with \code{qss-present}.
+\end{itemize}
+
+The text stays plain text; the object rides along in the text property
+\code{qss-presentation}. Here is a buffer of notes that presents some files; each
+name is as good as a file row in a table:
+
+\begin{lstlisting}
+(with-current-buffer (get-buffer-create "*to read*")
+  (erase-buffer)
+  (insert "Files to look at:\n")
+  (dolist (f (directory-files "~/notes" t "\\.org\\'"))
+    (insert "  ")
+    (qss-present (list :path f) 'file (file-name-nondirectory f))
+    (insert "\n"))
+  (display-buffer (current-buffer)))
+\end{lstlisting}
+
+\section{Accept}
+
+\code{(qss-accept \emph{type} \emph{prompt})} asks for an object of a type.
+
+\begin{enumerate}
+\item It looks at \textbf{every visible window} --- not at hidden buffers: what
+  you see is what you can choose --- and collects the presentations of the type
+  or of any type below it.
+\item It \textbf{highlights} them; the prompt tells how many: \enquote{with
+  file: (3 shown, click one or type)}.
+\item You answer by a \textbf{click} on one (or \kbd{RET} on it): the answer is
+  the object itself. Or you \textbf{type} its label, with completion over the
+  highlighted ones. Or you type something new, and the text is \textbf{parsed}
+  for the type: a path for \code{file}, \code{"10kb"} for \code{size},
+  \code{"3hr"} for \code{duration}, \code{"2026-10-22"} for \code{time}.
+\item \kbd{C-g} gives up. The highlighting is gone either way.
+\end{enumerate}
+
+A row whose object fits is offered as a whole row; otherwise its cells are
+looked at. So \code{file} offers file rows, \code{value} the cells.
+
+\section{Types}
+
+\begin{Verbatim}
+t ─┬─ object ─┬─ file ─ directory
+   │          ├─ process, db-table, row
+   └─ value ──┬─ number ─ integer ─┬─ size
+              │                    └─ duration
+              └─ string, time, symbol
+\end{Verbatim}
+
+A directory is a file too, a size a number: accepting \code{file} offers
+directories as well, accepting \code{directory} only directories. New types come
+with \code{qss-define-presentation-type}, with a parser for typed text; a type
+without one uses the parser of the nearest type above it. Section~\ref{ref:types}
+lists them all.
+
+\section{Examples}
+
+\paragraph{A value into the input.} In the REPL, while typing, \kbd{C-c C-v}
+accepts a \code{value}:
+
+\begin{Verbatim}
+qss> (sqlite (qss-demo-database) "Orders")
+...
+    4714           3 2026-10-02   45.0 paid
+qss> (where (= :customer-no ▮        C-c C-v: all cells light up; click the 3
+qss> (where (= :customer-no 3▮
+\end{Verbatim}
+
+A number goes in as a number, text as a string, a time as
+\code{"2026-10-22 07:11:05"}. \kbd{C-c C-f} does the same with the name of a
+file: \code{!wc -l} \kbd{C-c C-f}, click a file row.
+
+\paragraph{Two files from two places.} Show two directories, each in a buffer of
+its own (\code{[buffer]}), side by side. On \file{main.el} in the left window,
+\kbd{a} $\to$ \emph{Compare with file\ldots}: the left row is the first file;
+every file row in both windows lights up; click \file{main.el} on the right,
+and \code{diff} shows the differences.
+
+\paragraph{Only what fits.} On a file, \emph{Copy into directory\ldots} lights up
+only directories --- in every visible window, the notes buffer included.
+
+\paragraph{A value as the start.} On a size cell, \kbd{a} offers \emph{Files
+larger than this, here}.
+
+\paragraph{From Lisp.}
+\begin{lstlisting}
+(let ((dir (qss-accept 'directory "Back up into: ")))
+  (copy-directory "~/notes" (qss-file-name dir)))
+\end{lstlisting}
+
+\section{Commands with typed arguments}\label{sec:commands}
+
+\code{qss-define-command} defines a command whose arguments are accepted by
+type, after \code{define-command} in CLIM:
+
+\begin{lstlisting}
+(qss-define-command my-open-both "Open side by side"
+    ((a file "Open: ") (b file "next to: "))
+  "Show the files A and B side by side."
+  (find-file (qss-file-name a))
+  (find-file-other-window (qss-file-name b)))
+\end{lstlisting}
+
+\begin{itemize}
+\item \kbd{M-x my-open-both} accepts both files, each by a click or by typing.
+\item On every presentation of the type of the first argument --- every file
+  row, every presented file in any buffer --- \kbd{a} and the right mouse button
+  offer \emph{Open side by side\ldots}. That presentation is the first argument;
+  the others are accepted.
+\item \code{qss-file-name} turns what was chosen into a file name: a file row, a
+  stored row, a typed path, or a row of an own type with a method for it.
+\end{itemize}
+
+\section{Compared with CLIM}
+
+\qss{} takes the core --- presentations with types, accept with highlighting,
+commands with typed arguments offered on the objects --- and leaves much out:
+there are no presentation translators besides the first argument of a command,
+no parsing of whole command lines in an input editor, no views, and only visible
+windows are searched. What it adds is that every Emacs buffer can take part.
+
+% ======================================================================
+\chapter{Contracts}\label{chap:contracts}
+
+\section{Why}
+
+\qss{} is built around generic functions that others --- or you, later ---
+fill with methods. Tests check examples; contracts check every call. A contract
+says what a function takes and what it returns, and when it is broken, the
+message says \emph{who} broke it:
+
+\begin{Verbatim}
+qss> (processes) (first -1)
+Contract violation: qss-first: argument 2 must satisfy natnump, got -1
+  blame: the caller (outside the checked functions)
+  contract: (-> qss-tabular (opt natnump) qss-result)
+\end{Verbatim}
+
+\begin{Verbatim}
+Contract violation: qss-columns: the result must satisfy
+(listof qss-column-spec), got (name 42) (element 1 is 42, not qss-column-spec)
+  blame: qss-columns itself, the method for my-thing
+  contract: (-> any (listof qss-column-spec))
+\end{Verbatim}
+
+\section{Blame}
+
+The contracts follow Racket. A contract is an \code{:around} advice on the
+function: it sees the arguments before the function runs and the result before
+it returns, so it knows the direction of the fault exactly.
+
+\begin{itemize}
+\item An argument that breaks the contract is the fault of the
+  \textbf{caller}. Every contract binds the name of its function while it runs,
+  so if the caller is a checked function itself, it is named:
+  \enquote{blame: the caller, qss-continue}. The checked functions are the
+  boundaries, as modules are in Racket.
+\item A result that breaks it is the fault of the \textbf{function} --- for a
+  generic function, of the method for the type of the first argument. This is
+  where own row types are caught.
+\end{itemize}
+
+\section{The interface}
+
+The whole interface is in one file, \file{qss-interface.el}, readable as the
+reference of \qss; section~\ref{ref:contracts} lists it. The protocol of rows
+comes first, since methods for own types are where mistakes happen:
+
+\begin{lstlisting}
+(qss-define-contract qss-columns (-> any (listof qss-column-spec)))
+(qss-define-contract qss-sqlite  (-> stringp (opt (or/c stringp symbolp))
+                                     qss-relation-p))
+(qss-define-contract qss-accept  (-> qss-presentation-type-name (opt stringp) any))
+\end{lstlisting}
+
+\kbd{C-h f} shows the contract of a function, and the contracts are a source:
+\code{(contracts) (where (like :function "\%sql\%"))}.
+
+The contracts stand beside the code, not in it. They hold for every method of a
+generic function, also methods added later, and survive redefinition. They are
+put only on the boundaries: functions that run once per row or per cell
+(\code{qss-field}, the formats of values) have none. There they doubled the time
+of a pipe over 20000 rows; at the boundaries they cost a few percent.
+\code{qss-contract-enabled} turns them all off.
+
+\section{The language}
+
+\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\code{stringp}, \code{natnump}, \code{qss-table-p} \ldots & a predicate \\
+\code{any} & anything \\
+\code{(or/c \ldots)}, \code{(and/c \ldots)}, \code{(not/c \emph{c})} & one of, all of, not \\
+\code{(one-of \emph{v}\ldots)} & one of these values \\
+\code{(listof \emph{c})}, \code{(list/c \ldots)}, \code{(cons/c \emph{a} \emph{d})} & lists and conses \\
+\code{(lambda (x) \ldots)} & a predicate written in place \\
+\code{(-> \emph{arg}\ldots{} \emph{result})} & a function; \code{(opt \emph{c})} an optional argument (nil is always allowed), \code{(rest \emph{c})} the rest \\
+a name & a contract named with \code{qss-define-contract-type} \\
+\bottomrule
+\end{tabularx}
+
+A function passed as an argument is checked to be a function, but not wrapped.
+
+\section{For your own code}
+
+\file{qss-contract.el} depends on nothing else of \qss{} and can check any Emacs
+Lisp:
+
+\begin{lstlisting}
+(require 'qss-contract)
+(qss-define-contract-type 'my-weight '(and/c numberp (lambda (w) (>= w 0))))
+(qss-define-contract my-tare (-> my-weight my-weight my-weight))
+\end{lstlisting}
+
+% ======================================================================
+\chapter{A row type of your own}\label{chap:own}
+
+This chapter builds a complete row type: the Emacs Lisp libraries on
+\code{load-path}. It shows how the parts of \qss{} fit together --- a library
+becomes a table row, a presentation of a file, something to store in SQLite, the
+argument of a command, and a checked source. The code is the file
+\file{doc/qss-manual-example.el}; the tests check that it works.
+
+\section{The row object and the source}
+
+Any Lisp object can be a row. Here a structure, and a function that returns the
+table:
+
+\lstinputlisting{example-1.el.txt}
+\lstinputlisting{example-2.el.txt}
+
+\section{The protocol}
+
+Three methods make a library a row: its columns, its fields, what \kbd{RET} and
+\kbd{a} do. Fields need not be columns: \code{compiled} can be used in
+conditions but is not shown.
+
+\lstinputlisting{example-3.el.txt}
+
+Now this works:
+
+\begin{Verbatim}
+qss> (libraries "^qss-") (sort-by size :desc) (first 5)
+qss> (libraries) (where (> :size "100kb")) count
+qss> (libraries "^subr") (where (not (qss-field it 'compiled)))
+\end{Verbatim}
+
+The last line uses the field \code{compiled}; because it calls a function, it
+is a condition in Lisp with \code{it}, not one that could become SQL.
+
+\section{A library is a file}
+
+A new presentation type below \code{file}, a method that gives it to library
+rows, a label, and a method for \code{qss-file-name}:
+
+\lstinputlisting{example-4.el.txt}
+
+With that, everything that takes a \code{file} takes a library: \emph{Compare
+with file\ldots} and \emph{Copy into directory\ldots} appear on library rows,
+\kbd{C-c C-f} inserts their path, and \code{(qss-accept 'library)} reads a
+typed name such as \code{subr}.
+
+\section{Storing and a command of its own}
+
+The path is a column already, so nothing more needs to be stored; a stored row
+has a \code{path} and is a file again. A command for libraries only:
+
+\lstinputlisting{example-5.el.txt}
+\lstinputlisting{example-6.el.txt}
+
+On a library row, \kbd{a} now offers \emph{Show what it requires}, and
+\kbd{M-x my-library-requires} accepts a library by a click or by its name.
+
+\section{A contract}
+
+\lstinputlisting{example-7.el.txt}
+
+\code{(my-libraries 42)} is now reported as the fault of the caller. The
+contracts of the protocol check the methods above: had \code{qss-columns}
+returned something that is not a list of columns, the message would have named
+the method for \code{my-library}.
+
+% ======================================================================
+\chapter{Reference}\label{chap:reference}
+
+This chapter is written from the code by \file{doc/qss-manual-reference.el}.
+
+{\small\sloppy
+\input{reference}
+}
+
+% ======================================================================
+\chapter{Where the ideas come from}
+
+Little in \qss{} is new; it puts old ideas together in Emacs.
+
+\begin{description}
+\item[Nushell] Data as tables, not text; one vocabulary for every source; the
+  pipe. The names of the words, the units \code{10kb} and \code{3hr}, and NUON
+  come from there. \url{https://www.nushell.sh/}
+\item[dbplyr] A pipe over a database table stays a query and becomes SQL only
+  when the rows are needed; the same words work in memory and in the database.
+  \url{https://dbplyr.tidyverse.org/}
+\item[SQL] The meaning of the comparisons: \code{like}, \code{in}, and NULL as
+  unknown in a three-valued logic.
+\item[SQLite] One file as the store of everything, source and target alike.
+\item[CLIM and Dynamic Windows] Presentations, presentation types,
+  \code{accept}, commands with typed arguments offered on the objects shown.
+  McCLIM is a free implementation: \url{https://mcclim.common-lisp.dev/}.
+\item[CLOS] Generic functions with methods per type (\code{cl-generic} in Emacs):
+  the protocol of rows, so a file stays a file and own types fit in with a few
+  methods.
+\item[Racket contracts] Contracts at the boundaries, and blame: the caller or
+  the function. R.\,B.~Findler, M.~Felleisen, \emph{Contracts for Higher-Order
+  Functions}, ICFP 2002.
+  \url{https://docs.racket-lang.org/guide/contracts.html}
+\item[Emacs] \code{vtable} for the tables, the built-in \code{sqlite}, advice
+  for the contracts, text properties for the presentations, IELM for the shape
+  of the REPL --- and the conviction that the editor is the place to work in.
+\end{description}
+
+\appendix
+
+\chapter{Files and tests}
+
+\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\file{qss.el} & package headers, loads everything, the commands to run the tests \\
+\file{qss-table.el} & tables, display, the protocol of rows, \code{files}, \code{processes}, \code{run} \\
+\file{qss-pipe.el} & the words, conditions, \code{qss->}, \code{to}, \code{into}, groups, joins \\
+\file{qss-sql.el} & SQLite as a source and a store; joins and groups as SQL \\
+\file{qss-nu.el}, \file{qss-nuon.el} & Nushell; NUON reader and writer \\
+\file{qss-present.el} & presentation types, \code{qss-present}, \code{qss-accept}, commands \\
+\file{qss-menu.el} & actions at point, \kbd{a}, the right mouse button, \kbd{w} \\
+\file{qss-edit.el} & changing rows of SQLite tables; \code{update-rows}, \code{delete-rows} \\
+\file{qss-repl.el} & \kbd{M-x qss} \\
+\file{qss-contract.el} & contracts with blame (stands alone) \\
+\file{qss-interface.el} & the interface of \qss{} with its contracts \\
+\file{qss-examples.el} & \kbd{M-x qss-examples} \\
+\file{doc/} & this manual, its example and the writer of its reference \\
+\bottomrule
+\end{tabularx}
+
+\kbd{M-x qss-run-tests} runs the tests in Emacs; from a shell:
+
+\begin{Verbatim}
+emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
+\end{Verbatim}
+
+The tests run with the contracts on, so every test checks the code against the
+contracts as well. The SQLite tests are skipped without SQLite, the Nushell
+tests without \code{nu}.
+
+\end{document}

@@ -91,5 +91,12 @@ The methods stay defined: they only apply to the test type."
                                      (buffer-string))))
           (kill-buffer "*qss*"))))))
 
+(ert-deftest qss-interface-generics-keep-their-docstrings ()
+  "Every checked generic function still has the docstring of its cl-defgeneric."
+  (dolist (fn (qss-contract-functions))
+    (when (qss-contract--generic-p fn)
+      (let ((first (car (split-string (or (documentation fn) "") "\n"))))
+        (should (and fn (not (string-empty-p first))))))))
+
 (provide 'qss-interface-test)
 ;;; qss-interface-test.el ends here

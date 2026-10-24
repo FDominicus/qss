@@ -134,11 +134,17 @@
             ;; RET on a file row opens the file, also from elsewhere
             (let* ((default-directory (file-name-as-directory dir))
                    (row (car (qss-> (nu "ls") (where (= :name "small.txt")) collect))))
-              (let ((default-directory "/"))
-                (save-window-excursion
-                  (qss-default-action row)
-                  (should (equal (buffer-name) "small.txt"))
-                  (kill-buffer)))))
+              (let ((default-directory "/")
+                    (before (buffer-list)))
+                (unwind-protect
+                    (save-window-excursion
+                      (qss-default-action row)
+                      ;; the file, not the name of the buffer: a buffer
+                      ;; small.txt left open elsewhere makes it small.txt<2>
+                      (should (file-equal-p (buffer-file-name)
+                                            (expand-file-name "small.txt" dir))))
+                  (dolist (b (buffer-list))
+                    (unless (memq b before) (kill-buffer b)))))))
         (delete-directory dir t)))))
 
 (ert-deftest qss-nu-in-repl ()

@@ -1,0 +1,3 @@
+(cl-defmethod qss-stored-fields ((_ my-library))
+  "A stored library keeps its path (it is a column already) and nothing more."
+  nil)

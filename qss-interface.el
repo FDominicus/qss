@@ -39,6 +39,7 @@
 (require 'qss-nuon)
 (require 'qss-present)
 (require 'qss-menu)
+(require 'qss-edit)
 
 ;;; ------------------------------------------------------------------
 ;;; Named contracts
@@ -64,6 +65,10 @@
 
 (qss-define-contract-type 'qss-result '(or/c qss-table-p qss-relation-p)
   "What most words return: a table, or a query on SQLite.")
+
+(qss-define-contract-type 'qss-aggregate
+  '(and/c consp (lambda (a) (memq (car a) qss-aggregates)))
+  "An aggregate: (FN COLUMN) or (FN COLUMN :as NAME), FN one of sum avg min max count.")
 
 (qss-define-contract-type 'qss-action '(cons/c stringp functionp)
   "An action: (LABEL . FUNCTION).")
@@ -109,7 +114,9 @@
 (qss-define-contract qss-first (-> qss-tabular (opt natnump) qss-result))
 (qss-define-contract qss-last (-> qss-tabular (opt natnump) qss-result))
 (qss-define-contract qss-get (-> qss-tabular qss-column-name qss-result))
-(qss-define-contract qss-group-by (-> qss-tabular qss-column-name qss-result))
+(qss-define-contract qss-group-by (-> qss-tabular (rest (or/c qss-column-name qss-aggregate)) qss-result))
+(qss-define-contract qss-summarize (-> qss-tabular (rest qss-aggregate) qss-result))
+(qss-define-contract qss-join (-> qss-tabular qss-tabular (rest any) qss-result))
 (qss-define-contract qss-each (-> qss-tabular functionp qss-result))
 (qss-define-contract qss-columns-of (-> qss-tabular qss-table-p))
 (qss-define-contract qss-count (-> qss-tabular natnump))
@@ -126,6 +133,9 @@
 (qss-define-contract qss-sql-write
   (-> qss-table-p stringp stringp (opt (one-of replace append)) natnump))
 (qss-define-contract qss-sql-name-key (-> stringp symbolp))
+(qss-define-contract qss-sql-rowid (-> any (or/c null integerp)))
+(qss-define-contract qss-update-rows (-> qss-tabular (rest any) natnump))
+(qss-define-contract qss-delete-rows (-> qss-tabular (rest any) natnump))
 
 ;;; ------------------------------------------------------------------
 ;;; Values as text

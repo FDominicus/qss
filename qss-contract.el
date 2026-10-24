@@ -242,13 +242,27 @@ RESULT a (SPEC . CHECK)."
 ;;; ------------------------------------------------------------------
 ;;; Defining
 
+(defmacro qss-contract--keeping-documentation (fn &rest body)
+  "Run BODY and keep the documentation FN has in its symbol.
+A generic function keeps its docstring in the property
+`function-documentation'; `advice-add' and `advice-remove' replace it
+with one made from the dispatcher, which has none, so the docstring of
+`cl-defgeneric' would be lost in C-h f."
+  (declare (indent 1))
+  (let ((doc (make-symbol "doc")))
+    `(let ((,doc (get ,fn 'function-documentation)))
+       (prog1 (progn ,@body)
+         (when (stringp ,doc)
+           (put ,fn 'function-documentation ,doc))))))
+
 (defun qss-contract-add (fn spec)
   "Put the function contract SPEC on the function FN (a symbol).
 A contract FN had before is replaced.  See `qss-define-contract'."
   (qss-contract-remove fn)
   (pcase-let* ((`(,args ,rest ,result) (qss-contract--parse-function spec))
                (advice (qss-contract--make-advice fn args rest result)))
-    (advice-add fn :around advice '((name . qss-contract) (depth . -90)))
+    (qss-contract--keeping-documentation fn
+      (advice-add fn :around advice '((name . qss-contract) (depth . -90))))
     (puthash fn (list spec args rest result advice) qss-contract--table)
     fn))
 
@@ -263,7 +277,8 @@ is."
   "Remove the contract of FN, if it has one."
   (let ((entry (gethash fn qss-contract--table)))
     (when entry
-      (advice-remove fn (nth 4 entry))
+      (qss-contract--keeping-documentation fn
+        (advice-remove fn (nth 4 entry)))
       (remhash fn qss-contract--table))))
 
 (defun qss-contract-remove-all ()

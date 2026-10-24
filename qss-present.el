@@ -203,12 +203,21 @@ The parser of TYPE or of the nearest supertype that has one is used."
   (truncate-string-to-width (format "%d %s" (qss-process-pid object) (qss-field object 'command))
                             60))
 
-(defun qss-file-name (object)
-  "Return the file name OBJECT stands for: a file row, a stored row, a name."
-  (cond ((qss-file-p object) (qss-file-path object))
-        ((stringp object) (expand-file-name object))
+(cl-defgeneric qss-file-name (object)
+  "Return the file name OBJECT stands for.
+A file row, a stored row with a path, or a name; own row types whose
+presentation type is `file' add a method, so the commands for files
+work on them.")
+
+(cl-defmethod qss-file-name (object)
+  "Return the name of the file OBJECT, a name or a row with a path."
+  (cond ((stringp object) (expand-file-name object))
         ((qss--row-path object))
         (t (user-error "Not a file: %S" object))))
+
+(cl-defmethod qss-file-name ((object qss-file))
+  "Return the path of the file row OBJECT."
+  (qss-file-path object))
 
 ;;; ------------------------------------------------------------------
 ;;; Presenting

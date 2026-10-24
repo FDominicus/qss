@@ -21,6 +21,9 @@
 ;;         group-by  columns  count  collect (the rows as a list)
 ;;         to (the table as text: (to org), (to csv) ...)
 ;;         into (store the table: (into sqlite "Name"), see qss-sql.el)
+;;         join (with another table: (join (sqlite f "Customers") :on customer-no))
+;;         group-by with aggregates: (group-by status (sum amount) (max amount))
+;;         summarize (one row: (summarize (sum amount) (avg amount)))
 ;;
 ;; Conditions (`where'):
 ;;   - Without `it' they are data: keywords are columns, everything else
@@ -350,23 +353,42 @@ become SQL."
     (message "Copied: %s" v)))
 
 (cl-defstruct (qss-group (:constructor qss--make-group) (:copier nil))
-  "A group from `qss-group-by': the rows whose COLUMN has the value KEY."
-  column key rows columns title)
+  "A group from `qss-group-by' or `qss-summarize'.
+KEYS: alist (COLUMN . VALUE) of the grouping columns.  COUNT: the number
+of rows.  AGGS: alist (NAME . VALUE) of the aggregates.  ROWS: the rows
+of the group, when it was made in memory.  SOURCE: the query the group
+was made from on SQLite (its rows are fetched when RET asks for them).
+SPECS: the columns of the group table; ROW-COLUMNS: those of its rows."
+  keys count aggs rows source specs row-columns title)
 
 (cl-defmethod qss-columns ((row qss-group))
-  "Return the columns of the group ROW: its key column and the count."
-  (list (qss-group-column row) '(count :type number)))
+  "Return the columns of the group ROW: keys, count, aggregates."
+  (qss-group-specs row))
 
 (cl-defmethod qss-field ((row qss-group) name)
   "Return field NAME of the group ROW."
-  (cond ((eq name (qss-group-column row)) (qss-group-key row))
-        ((eq name 'count) (length (qss-group-rows row)))
-        ((eq name 'rows) (qss-group-rows row))))
+  (let ((key (assq name (qss-group-keys row)))
+        (agg (assq name (qss-group-aggs row))))
+    (cond (key (cdr key))
+          ((eq name 'count) (qss-group-count row))
+          (agg (cdr agg))
+          ((eq name 'rows) (qss-group-rows row)))))
+
+(defun qss--group-condition (keys)
+  "Return a condition (as data) that holds for the rows with the KEYS."
+  (cons 'and (mapcar (lambda (k)
+                       (let ((col (intern (format ":%s" (car k)))))
+                         (if (null (cdr k)) `(is-null ,col) `(= ,col ,(cdr k)))))
+                     keys)))
 
 (cl-defmethod qss-default-action ((row qss-group))
-  "Show the rows of the group ROW."
-  (qss-show (qss-make-table (qss-group-title row) (qss-group-rows row)
-                            (qss-group-columns row))))
+  "Show the rows of the group ROW.
+A group made on SQLite fetches them with a query of its own."
+  (if (qss-group-source row)
+      (qss-display (eval `(qss-> qss--source (where ,(qss--group-condition (qss-group-keys row))))
+                         `((qss--source . ,(qss-group-source row)))))
+    (qss-show (qss-make-table (qss-group-title row) (qss-group-rows row)
+                              (qss-group-row-columns row)))))
 
 ;;; ------------------------------------------------------------------
 ;;; Words
@@ -546,28 +568,237 @@ runs here.")
                  (if rows (qss-columns (car rows)) '(value))
                  (lambda (tab) (qss-each tab fn)))))
 
-(cl-defgeneric qss-group-by (table col)
-  "Group the rows of TABLE by the value of COL.
-One row per value with the count; RET on a group shows its rows.")
+(defconst qss-aggregates '(sum avg min max count)
+  "The aggregates of `group-by' and `summarize'.")
 
-(cl-defmethod qss-group-by (table col)
-  "Group the rows of TABLE by COL, in memory."
+(defun qss--group-args (args)
+  "Return (KEYS . AGGS) from the ARGS of `group-by' or `summarize'.
+KEYS: the grouping columns (symbols).  AGGS: list of (FN COLUMN NAME)
+from forms (FN COLUMN) or (FN COLUMN :as NAME); NAME defaults to
+FN-COLUMN, e.g. sum-amount."
+  (let (keys aggs)
+    (dolist (a args)
+      (if (consp a)
+          (pcase a
+            (`(,fn ,col . ,rest)
+             (unless (memq fn qss-aggregates)
+               (user-error "Unknown aggregate %S; known: %s" fn
+                           (mapconcat #'symbol-name qss-aggregates " ")))
+             (let ((name (if (eq (car rest) :as) (qss--name (cadr rest))
+                           (intern (format "%s-%s" fn (qss--name col))))))
+               (push (list fn (qss--name col) name) aggs)))
+            (_ (user-error "An aggregate is (FN COLUMN), e.g. (sum amount): %S" a)))
+        (push (qss--name a) keys)))
+    (cons (nreverse keys) (nreverse aggs))))
+
+(defun qss--aggregate-spec (agg spec)
+  "Return the column spec of the aggregate AGG = (FN COLUMN NAME) over SPEC.
+Sums, averages, minima and maxima keep a size, duration or time;
+counts and other numbers are numbers."
+  (let ((type (plist-get (cdr spec) :type)))
+    (pcase (car agg)
+      ('count (list (nth 2 agg) :type 'number))
+      ((or 'sum 'avg) (list (nth 2 agg) :type (if (memq type '(size duration)) type 'number)))
+      (_ (if type (list (nth 2 agg) :type type) (nth 2 agg))))))
+
+(defun qss--aggregate (fn values)
+  "Return the aggregate FN over VALUES, ignoring missing ones, as SQL does.
+SUM, AVG, MIN, MAX of no values are missing (nil); COUNT is 0."
+  (let ((vs (delq nil (copy-sequence values))))
+    (pcase fn
+      ('count (length vs))
+      ('sum (and vs (apply #'+ vs)))
+      ('avg (and vs (/ (float (apply #'+ vs)) (length vs))))
+      ('min (and vs (cl-reduce (lambda (a b) (if (eql 1 (qss--compare a b)) b a)) vs)))
+      ('max (and vs (cl-reduce (lambda (a b) (if (eql -1 (qss--compare a b)) b a)) vs))))))
+
+(defun qss--key< (a b)
+  "Return non-nil if the key list A sorts before B; missing values last."
+  (let ((result nil) (done nil))
+    (while (and a (not done))
+      (let ((x (car a)) (y (car b)))
+        (cond ((equal x y))
+              ((null x) (setq done t))                ; nil last
+              ((null y) (setq result t done t))
+              (t (let ((c (condition-case nil (qss--compare x y)
+                            (error (qss--compare (format "%s" x) (format "%s" y))))))
+                   (unless (eql c 0) (setq result (eql c -1) done t))))))
+      (setq a (cdr a) b (cdr b)))
+    result))
+
+(defun qss--group (table keys aggs stage again)
+  "Group the rows of TABLE by KEYS with the aggregates AGGS, in memory.
+STAGE and AGAIN are as in `qss--derive'.  The groups are sorted by
+their keys, missing values last, as on SQLite."
   (let* ((table (qss-as-table table))
-         (name (qss--name col))
-         (groups nil))
+         (groups (make-hash-table :test #'equal))
+         (order nil))
     (dolist (r (qss-table-rows table))
-      (let* ((k (qss-field r name))
-             (cell (assoc k groups)))
-        (if cell (push r (cdr cell)) (push (list k r) groups))))
-    (qss--derive table (format "group-by %s" name)
-                 (mapcar (lambda (g)
-                           (qss--make-group :column name :key (car g)
-                                            :rows (nreverse (cdr g))
-                                            :columns (qss-table-columns table)
-                                            :title (format "%s = %s" name (car g))))
-                         (nreverse groups))
-                 (list (qss--spec-of table name) '(count :type number))
-                 (lambda (tab) (qss-group-by tab col)))))
+      (let ((k (mapcar (lambda (key) (qss-field r key)) keys)))
+        (unless (gethash k groups) (push k order))
+        (push r (gethash k groups))))
+    ;; summarize over no rows: one row, as in SQL
+    (when (and (null keys) (null order)) (push nil order))
+    (let* ((key-specs (mapcar (lambda (k) (qss--spec-of table k)) keys))
+           (agg-specs (mapcar (lambda (a) (qss--aggregate-spec a (qss--spec-of table (nth 1 a)))) aggs))
+           (specs (append key-specs (list '(count :type number)) agg-specs)))
+      (qss--derive
+       table stage
+       (mapcar (lambda (k)
+                 (let ((rows (nreverse (gethash k groups))))
+                   (qss--make-group
+                    :keys (cl-mapcar #'cons keys k)
+                    :count (length rows)
+                    :aggs (mapcar (lambda (a)
+                                    (cons (nth 2 a)
+                                          (qss--aggregate (car a) (mapcar (lambda (r) (qss-field r (nth 1 a))) rows))))
+                                  aggs)
+                    :rows rows
+                    :specs (mapcar #'qss--column-spec specs)
+                    :row-columns (qss-table-columns table)
+                    :title (if keys
+                               (mapconcat (lambda (kv) (format "%s = %s" (car kv) (cdr kv)))
+                                          (cl-mapcar #'cons keys k) ", ")
+                             "all rows"))))
+               (sort (nreverse order) #'qss--key<))
+       specs again))))
+
+(defun qss--group-stage (word args)
+  "Return the title stage of WORD with ARGS."
+  (format "%s %s" word (mapconcat (lambda (a) (format "%s" a)) args " ")))
+
+(cl-defgeneric qss-group-by (table &rest args)
+  "Group the rows of TABLE by the columns in ARGS, with aggregates.
+ARGS are column names and aggregates (FN COLUMN) or (FN COLUMN :as
+NAME), FN one of `qss-aggregates':  (group-by status (sum amount)).
+One row per group: the keys, the count and the aggregates, sorted by
+the keys (missing values last).  RET on a group shows its rows.")
+
+(cl-defmethod qss-group-by (table &rest args)
+  "Group the rows of TABLE by ARGS, in memory."
+  (pcase-let ((`(,keys . ,aggs) (qss--group-args args)))
+    (unless keys (user-error "group-by needs a column; for all rows use summarize"))
+    (qss--group table keys aggs (qss--group-stage "group-by" args)
+                (lambda (tab) (apply #'qss-group-by tab args)))))
+
+(cl-defgeneric qss-summarize (table &rest aggs)
+  "Return one row with the count of TABLE and the aggregates AGGS.
+AGGS are (FN COLUMN) or (FN COLUMN :as NAME):
+  (summarize (sum amount) (max order-date))")
+
+(cl-defmethod qss-summarize (table &rest aggs)
+  "Summarize TABLE by AGGS, in memory."
+  (pcase-let ((`(,keys . ,aggs*) (qss--group-args aggs)))
+    (when keys (user-error "summarize takes only aggregates such as (sum amount); for groups use group-by"))
+    (qss--group table nil aggs* (qss--group-stage "summarize" aggs)
+                (lambda (tab) (apply #'qss-summarize tab aggs)))))
+
+;;; ------------------------------------------------------------------
+;;; Joining
+
+(defun qss--join-on (on left-names right-names)
+  "Return the pairs (LEFT . RIGHT) of join columns from ON.
+ON is a column (the same name on both sides), a list (LEFT RIGHT) of
+two names, or a list of such lists; nil means all names both sides
+have in common.  LEFT-NAMES and RIGHT-NAMES are the column names."
+  (let ((pairs (cond
+                ((null on)
+                 (or (mapcar (lambda (n) (cons n n))
+                             (cl-remove-if-not (lambda (n) (memq n right-names)) left-names))
+                     (user-error "join: no column in common; say which with :on")))
+                ((atom on) (list (cons (qss--name on) (qss--name on))))
+                ((and (= (length on) 2) (cl-every #'atom on))
+                 (list (cons (qss--name (car on)) (qss--name (cadr on)))))
+                (t (mapcar (lambda (p)
+                             (if (atom p) (cons (qss--name p) (qss--name p))
+                               (cons (qss--name (car p)) (qss--name (cadr p)))))
+                           on)))))
+    (dolist (p pairs)
+      (unless (memq (car p) left-names) (user-error "join: the left table has no column %s" (car p)))
+      (unless (memq (cdr p) right-names) (user-error "join: the right table has no column %s" (cdr p))))
+    pairs))
+
+(defun qss--join-args (options)
+  "Return (ON . KIND) from the OPTIONS of `join': :on ... and :kind inner|left."
+  (let ((on nil) (kind 'inner))
+    (while options
+      (pcase (pop options)
+        (:on (setq on (pop options)))
+        (:kind (setq kind (pop options))
+               (unless (memq kind '(inner left))
+                 (user-error "join: :kind is inner or left, not %S" kind)))
+        (other (user-error "join: unknown option %S (known: :on :kind)" other))))
+    (cons on kind)))
+
+(defun qss--join-columns (left-names right-names pairs)
+  "Return the right columns kept by a join and their names in the result.
+A list of (RIGHT-NAME . RESULT-NAME): a join column with the same name
+on both sides appears once; a name the left side has too gets -2."
+  (let ((result nil) (taken (copy-sequence left-names)))
+    (dolist (n right-names)
+      (unless (cl-some (lambda (p) (and (eq (cdr p) n) (eq (car p) n))) pairs)
+        (let ((new n) (i 2))
+          (while (memq new taken)
+            (setq new (intern (format "%s-%d" n i)) i (1+ i)))
+          (push new taken)
+          (push (cons n new) result))))
+    (nreverse result)))
+
+(defun qss--join-key (row names)
+  "Return the values of NAMES in ROW as a key, or nil if one is missing.
+Whole floats count as integers, so 3 and 3.0 match."
+  (let ((key (mapcar (lambda (n)
+                       (let ((v (qss-field row n)))
+                         (if (and (floatp v) (= v (ffloor v))) (truncate v) v)))
+                     names)))
+    (and (not (memq nil key)) key)))
+
+(cl-defgeneric qss-join (table other &rest options)
+  "Join TABLE with OTHER: rows whose join columns are equal, side by side.
+OPTIONS: :on COLUMN, :on (LEFT RIGHT) or :on ((L1 R1) (L2 R2)) (default:
+all columns both have); :kind inner (default, only rows with a partner)
+or left (all rows of TABLE, without a partner the columns of OTHER are
+empty).  Missing values never match, as in SQL.  The rows of the result
+are data (property lists).")
+
+(cl-defmethod qss-join (table other &rest options)
+  "Join TABLE with OTHER in memory."
+  (pcase-let* ((table (qss-as-table table))
+               (other (qss-as-table other))
+               (`(,on . ,kind) (qss--join-args options))
+               (left-names (mapcar #'car (qss-table-columns table)))
+               (right-names (mapcar #'car (qss-table-columns other)))
+               (pairs (qss--join-on on left-names right-names))
+               (right-cols (qss--join-columns left-names right-names pairs))
+               (index (make-hash-table :test #'equal)))
+    (dolist (r (qss-table-rows other))
+      (let ((k (qss--join-key r (mapcar #'cdr pairs))))
+        (when k (push r (gethash k index)))))
+    (let ((rows nil))
+      (dolist (l (qss-table-rows table))
+        (let* ((k (qss--join-key l (mapcar #'car pairs)))
+               (partners (and k (reverse (gethash k index))))
+               (left-part (cl-mapcan (lambda (n) (list (intern (format ":%s" n)) (qss-field l n)))
+                                     left-names)))
+          (cond (partners
+                 (dolist (r partners)
+                   (push (append left-part
+                                 (cl-mapcan (lambda (c) (list (intern (format ":%s" (cdr c)))
+                                                              (qss-field r (car c))))
+                                            right-cols))
+                         rows)))
+                ((eq kind 'left)
+                 (push (append left-part
+                               (cl-mapcan (lambda (c) (list (intern (format ":%s" (cdr c))) nil))
+                                          right-cols))
+                       rows)))))
+      (qss--derive table
+                   (format "join %s%s" (qss-table-title other) (if (eq kind 'left) " (left)" ""))
+                   (nreverse rows)
+                   (append (qss-table-columns table)
+                           (mapcar (lambda (c) (cons (cdr c) (cdr (qss--spec-of other (car c)))))
+                                   right-cols))
+                   (lambda (tab) (apply #'qss-join tab other options))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Tables as text: the word `to'
@@ -690,6 +921,7 @@ TARGET.")
 (defvar qss--words
   '((where . condition) (filter . condition)
     (select . columns) (reject . columns) (get . columns) (group-by . columns)
+    (summarize . columns) (join . join)
     (sort-by . columns)
     (first . values) (last . values)
     (count . none) (columns . none) (collect . none)
@@ -732,6 +964,10 @@ A word may name its function in its `qss-word-function' property."
         ('values `(,fn ,acc ,@args))
         ('none `(,fn ,acc))
         ('into `(,fn ,acc ',(car args) ,@(cdr args)))
+        ;; the other table is evaluated, a source such as (sqlite ...)
+        ;; written short as at the start of a pipe; the options are data
+        ('join `(,fn ,acc (qss-as-input ,(qss--expand-source (car args)))
+                     ,@(mapcar (lambda (a) `',a) (cdr args))))
         ('function `(,fn ,acc (lambda (it) (ignore it) ,(car args))))))))
 
 (defmacro qss-> (source &rest stages)

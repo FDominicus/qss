@@ -1,0 +1,1 @@
+(qss-define-contract my-libraries (-> (opt stringp) qss-table-p))

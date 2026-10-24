@@ -1,0 +1,19 @@
+(defun my-library-named (text)
+  "Return the library called TEXT, or nil."
+  (car (qss-table-rows
+        (my-libraries (concat "\\`" (regexp-quote text) "\\'")))))
+
+(qss-define-presentation-type 'library 'file #'my-library-named
+  "An Emacs Lisp library on `load-path'; its name can be typed.")
+
+(cl-defmethod qss-presentation-type ((_ my-library))
+  "A library row is a `library', and so a `file'."
+  'library)
+
+(cl-defmethod qss-presentation-label ((row my-library))
+  "Return the name of the library ROW."
+  (my-library-name row))
+
+(cl-defmethod qss-file-name ((row my-library))
+  "Return the file of the library ROW, for the commands on files."
+  (my-library-path row))

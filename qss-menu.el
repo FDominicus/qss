@@ -34,6 +34,9 @@
 (require 'cl-lib)
 (require 'qss-present)
 
+(declare-function qss-edit-cell "qss-edit" (&optional make-null))
+(declare-function qss-edit-toggle-delete "qss-edit" ())
+
 (defcustom qss-copy-format 'text
   "Format in which \\`w' copies a table; see `qss-to'."
   :type '(choice (const text) (const org) (const md) (const csv) (const tsv))
@@ -139,6 +142,12 @@ commands for the row or the value (`qss-commands-for'), the table."
                                (let ((text (qss--plain-value value spec)))
                                  (kill-new text)
                                  (message "Copied: %s" text)))))))
+           ;; changing a stored row, where that is possible (qss-edit.el)
+           (and row name (derived-mode-p 'qss-table-mode) (qss-relation-p whole)
+                (qss-sql--direct-p whole) (qss-sql-rowid row)
+                (list (cons (format "Change %s..." name) (lambda () (qss-edit-cell)))
+                      (cons (format "Make %s empty (NULL)" name) (lambda () (qss-edit-cell t)))
+                      (cons "Mark row for deletion" (lambda () (qss-edit-toggle-delete)))))
            (let ((row-type (and row (qss-presentation-type row)))
                  (cell-type (and name (qss--cell-type spec value))))
              (append (and row-type (not (eq row-type t)) (qss-commands-for row row-type))

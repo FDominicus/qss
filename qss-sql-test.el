@@ -182,11 +182,13 @@ the mapping of names to keys."
     (should (equal (mapcar (lambda (r) (qss-field r 'plz))
                            (qss-table-rows (qss-> (qss-stest--k) (where (= :ort "Bruchsal")) (get plz))))
                    '(76646 76646)))
+    ;; group-by is SQL now (GROUP BY); groups sorted by key, NULL last,
+    ;; so equal counts keep that order
     (let ((g (qss-> (qss-stest--k) (group-by ort) (sort-by count :desc))))
+      (should (qss-relation-p g))
       (should (equal (mapcar (lambda (r) (list (qss-field r 'ort) (qss-field r 'count)))
-                             (qss-table-rows g))
-                     ;; equal counts: order of first appearance
-                     '(("Bruchsal" 2) ("Karlsruhe" 1) (nil 1) ("Heidelsheim" 1)))))
+                             (qss-collect g))
+                     '(("Bruchsal" 2) ("Heidelsheim" 1) ("Karlsruhe" 1) (nil 1)))))
     (should (equal (qss-stest--ids (qss-> (qss-stest--k) (sort-by kunde-nr) (last 2))) '(4 5)))
     (should-error (qss-> (qss-stest--k) (where (string-suffix-p "X" :name1)) sql)
                   :type 'user-error)))
@@ -389,14 +391,22 @@ The real central database is never touched."
         (should (string-search "Parameters: (10000)" (qss-sql big)))
         (should (equal (qss-> big (get name) collect) '("big.txt"))))
       (should (= 2 (qss-> (sqlite "Dateien") (where (> :modified "2020-01-01")) count)))
-      ;; the path is stored, RET opens the file
-      (let ((row (car (qss-> (sqlite "Dateien") (where (= :name "small.txt")) collect))))
-        (should (equal (plist-get row :path) (expand-file-name "small.txt" dir)))
-        (save-window-excursion
-          (qss-default-action row)
-          (let ((buf (get-file-buffer (expand-file-name "small.txt" dir))))
-            (should buf)
-            (kill-buffer buf)))))))
+      ;; the path is stored, RET opens the file.  Paths are compared as
+      ;; files, not as text: on Windows one file has several spellings
+      ;; (c: or C:, short 8.3 names from TEMP).
+      (let ((row (car (qss-> (sqlite "Dateien") (where (= :name "small.txt")) collect)))
+            (small (expand-file-name "small.txt" dir))
+            (before (buffer-list)))
+        (should (file-equal-p (plist-get row :path) small))
+        (unwind-protect
+            (save-window-excursion
+              (qss-default-action row)
+              (should (cl-some (lambda (b) (and (buffer-file-name b)
+                                                (file-equal-p (buffer-file-name b) small)))
+                               (buffer-list))))
+          ;; whatever happens, close what the test opened
+          (dolist (b (buffer-list))
+            (unless (memq b before) (kill-buffer b))))))))
 
 (ert-deftest qss-into-sqlite-exists-replace-append ()
   (qss-stest--with-central dir

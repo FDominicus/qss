@@ -1,0 +1,195 @@
+% Written by qss-manual-reference.el from the code of qss 0.11.0.  Do not edit.
+\section{Words}\label{ref:words}
+\begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
+\toprule
+\textbf{Word} & \textbf{Function} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{collect} & \code{qss-collect} & Return the rows of TABLE as a Lisp list, at the end of a pipe. \\
+\code{columns} & \code{qss-columns-of} & Return the column names of TABLE as a table. \\
+\code{count} & \code{qss-count} & Return the number of rows of TABLE. \\
+\code{delete-rows} & \code{qss-delete-rows} & Delete the stored rows of TABLE, an SQLite query; return their number. \\
+\code{each} & \code{qss-each} & Call FN on every row of TABLE; the results are the new rows. \\
+\code{filter} & \code{qss-where} & Keep the rows of TABLE that satisfy COND. \\
+\code{first} & \code{qss-first} & Return the first N rows of TABLE (default 1). \\
+\code{get} & \code{qss-get} & Return the values of column COL of TABLE as a table with one column. \\
+\code{group-by} & \code{qss-group-by} & Group the rows of TABLE by the columns in ARGS, with aggregates. \\
+\code{into} & \code{qss-into} & Store TABLE in TARGET (a symbol) and return what was stored, as a source. \\
+\code{join} & \code{qss-join} & Join TABLE with OTHER: rows whose join columns are equal, side by side. \\
+\code{last} & \code{qss-last} & Return the last N rows of TABLE (default 1). \\
+\code{nu} & \code{qss-nu-pipe} & Send TABLE through the Nushell COMMAND and return the result. \\
+\code{reject} & \code{qss-reject} & Return TABLE with all columns except COLS (cut down as in \code{qss-select}). \\
+\code{select} & \code{qss-select} & Return TABLE with only the columns COLS. \\
+\code{sort-by} & \code{qss-sort-by} & Return TABLE sorted by column COL; DIR is :asc (default) or :desc. \\
+\code{sql} & \code{qss-sql} & Return the query REL as text with its parameters. \\
+\code{summarize} & \code{qss-summarize} & Return one row with the count of TABLE and the aggregates AGGS. \\
+\code{to} & \code{qss-to} & Return TABLE as text in FORMAT, one of \code{qss-text-formats}. \\
+\code{update-rows} & \code{qss-update-rows} & Set columns in the stored rows of TABLE, an SQLite query; return their number. \\
+\code{where} & \code{qss-where} & Keep the rows of TABLE that satisfy COND. \\
+\bottomrule
+\end{longtable}
+\section{Sources}\label{ref:sources}
+\begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
+\toprule
+\textbf{Source} & \textbf{Function} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{contracts} & \code{qss-contracts} & Return a table of the functions with a contract and their contracts. \\
+\code{files} & \code{qss-files} & Return a table of the files in DIR (default \code{default-directory}). \\
+\code{nu} & \code{qss-nu} & Run the Nushell COMMAND and return its result as a table. \\
+\code{processes} & \code{qss-processes} & Return a table of the running processes (from \code{process-attributes}). \\
+\code{run} & \code{qss-run} & Run PROGRAM with ARGS, without a shell, and return its output as a table. \\
+\code{sqlite} & \code{qss-sqlite} & Return the table TABLE of the SQLite file FILE as a query. \\
+\code{tables} & \code{qss-tables} & Return the tables of the SQLite file FILE (default \code{qss-database}). \\
+\bottomrule
+\end{longtable}
+\section{Options}\label{ref:options}
+All options are in the customization group \code{qss} (\code{M-x customize-group RET qss}).
+
+\begin{longtable}{@{}p{0.34\linewidth}p{0.18\linewidth}p{0.42\linewidth}@{}}
+\toprule
+\textbf{Option} & \textbf{Default} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{qss-contract-enabled} & \code{t} & Non-nil means contracts are checked. \\
+\code{qss-copy-format} & \code{text} & Format in which \textbackslash{}\code{w} copies a table; see \code{qss-to}. \\
+\code{qss-database} & \code{"\textasciitilde{}/\allowbreak{}.emacs.d/\allowbreak{}qss.sqlite3"} & The central SQLite file of qss. \\
+\code{qss-max-column-width} & \code{60} & Maximum width of a text column without its own :width, in characters. \\
+\code{qss-menu-label-width} & \code{70} & Maximum width of a label in the actions at point. \\
+\code{qss-nu-arguments} & \code{("--no-config-file")} & Arguments for \code{qss-nu-program} before -c. \\
+\code{qss-nu-format} & \code{nuon} & How data goes between Emacs and Nushell. \\
+\code{qss-nu-program} & \code{"nu"} & The Nushell program. \\
+\code{qss-nu-size-columns} & \code{(size mem virtual total free used available)} & Columns whose numbers are sizes in bytes, when \code{qss-nu-format} is \code{json}. \\
+\code{qss-repl-max-rows} & \code{30} & Maximum number of rows a table shows inside the qss REPL. \\
+\code{qss-repl-prompt} & \code{"qss\textgreater{} "} & Prompt of the qss REPL. \\
+\code{qss-sql-display-limit} & \code{1000} & Maximum number of rows a query fetches for display. \\
+\bottomrule
+\end{longtable}
+\section{Faces}\label{ref:faces}
+\begin{longtable}{@{}p{0.34\linewidth}p{0.62\linewidth}@{}}
+\toprule
+\textbf{Face} & \textbf{Used for} \\
+\midrule
+\endhead
+\code{qss-accept} & Face of the presentations \code{qss-accept} offers. \\
+\code{qss-edit-changed} & Face of a cell changed but not yet written. \\
+\code{qss-edit-deleted} & Face of a row marked for deletion. \\
+\code{qss-repl-directory} & Face of the directory in the qss REPL prompt. \\
+\code{qss-repl-error} & Face of error messages in the qss REPL. \\
+\code{qss-repl-prompt} & Face of the qss REPL prompt. \\
+\code{qss-repl-title} & Face of the title line above a table in the qss REPL. \\
+\code{qss-table} & Face of qss tables. \\
+\bottomrule
+\end{longtable}
+\section{Presentation types}\label{ref:types}
+\enquote{Text} says whether typed text can be read as the type.
+
+\begin{longtable}{@{}p{0.15\linewidth}p{0.15\linewidth}p{0.08\linewidth}p{0.54\linewidth}@{}}
+\toprule
+\textbf{Type} & \textbf{Below} & \textbf{Text} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{db-table} & \code{object} &  & A table of an SQLite file. \\
+\code{directory} & \code{file} & yes & A directory. \\
+\code{duration} & \code{integer} & yes & A duration in nanoseconds; \enquote{3hr} can be typed. \\
+\code{file} & \code{object} & yes & A file or directory. \\
+\code{integer} & \code{number} & yes & A whole number. \\
+\code{number} & \code{value} & yes & A number. \\
+\code{object} & \code{t} &  & Something with actions: a row object. \\
+\code{process} & \code{object} & yes & A system process. \\
+\code{row} & \code{object} &  & A row of data (a property list). \\
+\code{size} & \code{integer} & yes & A size in bytes; \enquote{10kb} can be typed. \\
+\code{string} & \code{value} & yes & Text. \\
+\code{symbol} & \code{value} & yes & A symbol. \\
+\code{time} & \code{value} & yes & A point in time; \enquote{2026-10-22} or \enquote{2026-10-22 07:30} can be typed. \\
+\code{value} & \code{t} & yes & A plain value: number, text, time. \\
+\bottomrule
+\end{longtable}
+\section{Commands with typed arguments}\label{ref:commands}
+\begin{longtable}{@{}p{0.27\linewidth}p{0.25\linewidth}p{0.42\linewidth}@{}}
+\toprule
+\textbf{Command} & \textbf{In the menu} & \textbf{Arguments} \\
+\midrule
+\endhead
+\code{qss-compare-files} & Compare with file & \code{a file}, \code{b file} \\
+\code{qss-copy-file-into} & Copy into directory & \code{file file}, \code{dir directory} \\
+\code{qss-files-larger-than} & Files larger than this, here & \code{size size} \\
+\bottomrule
+\end{longtable}
+\section{Named contracts}\label{ref:contract-types}
+\begin{longtable}{@{}p{0.3\linewidth}p{0.64\linewidth}@{}}
+\toprule
+\textbf{Named contract} & \textbf{Contract and meaning} \\
+\midrule
+\endhead
+\code{qss-action} & \code{(cons/c stringp functionp)}\newline An action: (LABEL . FUNCTION). \\
+\code{qss-aggregate} & \code{(and/c consp (lambda (a) (memq (car a) qss-aggregates)))}\newline An aggregate: (FN COLUMN) or (FN COLUMN :as NAME), FN one of sum avg min max count. \\
+\code{qss-column-name} & \code{(or/c symbolp stringp)}\newline A column name: name, :name or \enquote{name}. \\
+\code{qss-column-spec} & \code{(or/c symbolp (cons/c symbolp qss-interface--column-plist-p))}\newline A column: a field name, or (NAME . PLIST) with :type, :format, :align, :width. \\
+\code{qss-format} & \code{(or/c (one-of text org md csv tsv) stringp)}\newline A text format of \code{qss-to}. \\
+\code{qss-presentation-type-name} & \code{qss-presentation-type-p}\newline A presentation type: file, directory, size, value ... or t. \\
+\code{qss-result} & \code{(or/c qss-table-p qss-relation-p)}\newline What most words return: a table, or a query on SQLite. \\
+\code{qss-tabular} & \code{(or/c qss-table-p qss-relation-p list)}\newline What the words take: a table, a query, or a list of rows. \\
+\bottomrule
+\end{longtable}
+\section{Contracts}\label{ref:contracts}
+The 51 functions of the interface with their contracts, as \file{qss-interface.el} defines them.
+
+\begin{longtable}{@{}p{0.3\linewidth}p{0.64\linewidth}@{}}
+\toprule
+\textbf{Function} & \textbf{Contract} \\
+\midrule
+\endhead
+\code{qss-accept} & \code{(-\textgreater{} qss-presentation-type-name (opt stringp) any)} \\
+\code{qss-actions}\newline\emph{generic} & \code{(-\textgreater{} any (listof qss-action))} \\
+\code{qss-actions-at-point} & \code{(-\textgreater{} (listof (listof qss-action)))} \\
+\code{qss-as-input}\newline\emph{generic} & \code{(-\textgreater{} any qss-result)} \\
+\code{qss-as-table}\newline\emph{generic} & \code{(-\textgreater{} any qss-table-p)} \\
+\code{qss-collect}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular list)} \\
+\code{qss-columns}\newline\emph{generic} & \code{(-\textgreater{} any (listof qss-column-spec))} \\
+\code{qss-columns-of}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular qss-table-p)} \\
+\code{qss-commands-for} & \code{(-\textgreater{} any qss-presentation-type-name (listof qss-action))} \\
+\code{qss-continue} & \code{(-\textgreater{} qss-tabular consp any)} \\
+\code{qss-copy-table-as} & \code{(-\textgreater{} qss-tabular qss-format any)} \\
+\code{qss-count}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular natnump)} \\
+\code{qss-define-presentation-type} & \code{(-\textgreater{} symbolp qss-presentation-type-name (opt functionp) (opt stringp) symbolp)} \\
+\code{qss-delete-rows}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest any) natnump)} \\
+\code{qss-demo-database} & \code{(-\textgreater{} stringp)} \\
+\code{qss-each}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular functionp qss-result)} \\
+\code{qss-file-name}\newline\emph{generic} & \code{(-\textgreater{} any stringp)} \\
+\code{qss-files} & \code{(-\textgreater{} (opt stringp) qss-table-p)} \\
+\code{qss-first}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (opt natnump) qss-result)} \\
+\code{qss-get}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular qss-column-name qss-result)} \\
+\code{qss-group-by}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest (or/c qss-column-name qss-aggregate)) qss-result)} \\
+\code{qss-into}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular symbolp (rest any) any)} \\
+\code{qss-join}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular qss-tabular (rest any) qss-result)} \\
+\code{qss-last}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (opt natnump) qss-result)} \\
+\code{qss-make-table} & \code{(-\textgreater{} stringp list (opt (listof qss-column-spec)) (opt functionp) qss-table-p)} \\
+\code{qss-nu} & \code{(-\textgreater{} stringp any)} \\
+\code{qss-nu-pipe} & \code{(-\textgreater{} qss-tabular stringp any)} \\
+\code{qss-nuon-read} & \code{(-\textgreater{} stringp any)} \\
+\code{qss-present} & \code{(-\textgreater{} any (opt qss-presentation-type-name) (opt stringp) any)} \\
+\code{qss-presentation-label}\newline\emph{generic} & \code{(-\textgreater{} any stringp)} \\
+\code{qss-presentation-parse} & \code{(-\textgreater{} qss-presentation-type-name stringp any)} \\
+\code{qss-presentation-subtype-p} & \code{(-\textgreater{} qss-presentation-type-name qss-presentation-type-name any)} \\
+\code{qss-presentation-type}\newline\emph{generic} & \code{(-\textgreater{} any qss-presentation-type-name)} \\
+\code{qss-processes} & \code{(-\textgreater{} qss-table-p)} \\
+\code{qss-reject}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest qss-column-name) qss-result)} \\
+\code{qss-run} & \code{(-\textgreater{} stringp (rest stringp) qss-table-p)} \\
+\code{qss-select}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest qss-column-name) qss-result)} \\
+\code{qss-show} & \code{(-\textgreater{} qss-table-p (opt any) bufferp)} \\
+\code{qss-sort-by}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular qss-column-name (opt symbolp) qss-result)} \\
+\code{qss-sql} & \code{(-\textgreater{} any stringp)} \\
+\code{qss-sql-name-key} & \code{(-\textgreater{} stringp symbolp)} \\
+\code{qss-sql-rowid} & \code{(-\textgreater{} any (or/c null integerp))} \\
+\code{qss-sql-schema} & \code{(-\textgreater{} stringp (listof (cons/c stringp list)))} \\
+\code{qss-sql-write} & \code{(-\textgreater{} qss-table-p stringp stringp (opt (one-of replace append)) natnump)} \\
+\code{qss-sqlite} & \code{(-\textgreater{} stringp (opt (or/c stringp symbolp)) qss-relation-p)} \\
+\code{qss-stored-fields}\newline\emph{generic} & \code{(-\textgreater{} any (listof symbolp))} \\
+\code{qss-summarize}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest qss-aggregate) qss-result)} \\
+\code{qss-tables} & \code{(-\textgreater{} (opt stringp) qss-table-p)} \\
+\code{qss-to}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular qss-format stringp)} \\
+\code{qss-update-rows}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest any) natnump)} \\
+\code{qss-where}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (or/c qss-condition-p functionp) qss-result)} \\
+\bottomrule
+\end{longtable}

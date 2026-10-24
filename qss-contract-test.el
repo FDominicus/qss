@@ -24,6 +24,8 @@
 (declare-function qss-ctest-late nil)
 (declare-function qss-ctest-n nil)
 (declare-function qss-ctest-o nil)
+(declare-function qss-ctest-docgen nil)
+(declare-function qss-ctest-docfun nil)
 
 (defmacro qss-ctest--with-fns (fns &rest body)
   "Run BODY, then remove the contracts and definitions of FNS."
@@ -173,6 +175,24 @@
       (describe-function 'qss-ctest-help)
       (with-current-buffer (help-buffer)
         (should (string-search "Contract: (-> integerp integerp)" (buffer-string)))))))
+
+(ert-deftest qss-contract-keeps-docstring-of-generic ()
+  "The docstring of cl-defgeneric survives the contract, later methods and removal."
+  (qss-ctest--with-fns (qss-ctest-docgen)
+    (cl-defgeneric qss-ctest-docgen (x) "Return X, documented.")
+    (cl-defmethod qss-ctest-docgen ((x integer)) x)
+    (qss-define-contract qss-ctest-docgen (-> any any))
+    (should (string-prefix-p "Return X, documented." (documentation 'qss-ctest-docgen)))
+    (cl-defmethod qss-ctest-docgen ((x string)) x)
+    (should (string-prefix-p "Return X, documented." (documentation 'qss-ctest-docgen)))
+    (qss-contract-remove 'qss-ctest-docgen)
+    (should (string-prefix-p "Return X, documented." (documentation 'qss-ctest-docgen)))))
+
+(ert-deftest qss-contract-keeps-docstring-of-function ()
+  (qss-ctest--with-fns (qss-ctest-docfun)
+    (defun qss-ctest-docfun (x) "Return X, also documented." x)
+    (qss-define-contract qss-ctest-docfun (-> any any))
+    (should (string-search "Return X, also documented." (documentation 'qss-ctest-docfun)))))
 
 (provide 'qss-contract-test)
 ;;; qss-contract-test.el ends here

@@ -1,0 +1,25 @@
+(cl-defmethod qss-columns ((_ my-library))
+  "Return the columns of a library row."
+  '((name :width 30) (size :type size) path))
+
+(cl-defmethod qss-field ((row my-library) name)
+  "Return field NAME of the library ROW."
+  (pcase name
+    ('name (my-library-name row))
+    ('size (my-library-size row))
+    ('path (my-library-path row))
+    ('compiled (let ((el (string-remove-suffix ".gz" (my-library-path row))))
+                 (file-exists-p (concat (file-name-sans-extension el) ".elc"))))))
+
+(cl-defmethod qss-default-action ((row my-library))
+  "Visit the library ROW."
+  (find-file (my-library-path row)))
+
+(cl-defmethod qss-actions ((row my-library))
+  "Return the actions of the library ROW."
+  (ignore row)
+  (list (cons "Visit" #'qss-default-action)
+        (cons "Load" (lambda (r)
+                       (load (my-library-path r))
+                       (message "Loaded %s" (my-library-name r))))
+        (cons "Describe" #'qss-describe)))

@@ -1,0 +1,22 @@
+(defun my-libraries (&optional regexp)
+  "Return a table of the Emacs Lisp libraries on `load-path'.
+With REGEXP, only those whose name matches it."
+  (let ((seen (make-hash-table :test #'equal)) (rows nil))
+    (dolist (dir load-path)
+      (when (file-directory-p dir)
+        (dolist (file (directory-files dir t "\\.el\\(?:\\.gz\\)?\\'" t))
+          (let ((name (replace-regexp-in-string "\\.el\\(?:\\.gz\\)?\\'" ""
+                                                (file-name-nondirectory file))))
+            (when (and (not (gethash name seen))
+                       (or (null regexp) (string-match-p regexp name)))
+              (puthash name t seen)
+              (push (my-library--make
+                     :name name :path file
+                     :size (file-attribute-size (file-attributes file)))
+                    rows))))))
+    (qss-make-table (if regexp (format "libraries %s" regexp) "libraries")
+                    (nreverse rows) nil
+                    (lambda () (my-libraries regexp)))))
+
+;; A short name for pipes: (libraries "^subr")
+(setf (alist-get 'libraries qss-sources) 'my-libraries)

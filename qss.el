@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.10.0
+;; Version: 0.12.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -66,6 +66,8 @@
 ;;   qss-menu.el      actions at point: a, the right mouse button, w
 ;;   qss-contract.el  contracts with blame, after Racket (stands alone)
 ;;   qss-interface.el the public interface of qss with its contracts
+;;   qss-edit.el      changing rows of SQLite tables: e d u, C-c C-c;
+;;                    the words update-rows and delete-rows
 ;;   qss-repl.el      M-x qss, the REPL
 ;;   qss-examples.el  M-x qss-examples
 
@@ -78,6 +80,7 @@
 (require 'qss-menu)
 (require 'qss-repl)
 (require 'qss-nu)
+(require 'qss-edit)
 ;; Last: the contracts of the interface, on everything above.
 (require 'qss-interface)
 

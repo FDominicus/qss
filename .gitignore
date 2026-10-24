@@ -4,3 +4,7 @@ qss-pkg.el
 #*#
 .#*
 *~
+doc/*.aux
+doc/*.log
+doc/*.toc
+doc/*.out

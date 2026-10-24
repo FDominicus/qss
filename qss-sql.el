@@ -210,8 +210,12 @@ COLUMNS is the schema of the table, or the selection after select or
 reject.  INNER is a query this one is a subquery over (after LIMIT).
 WHERES: list of (SQL . PARAMS).  ORDER: list of (KEY DESCENDING SQL),
 most important first; SQL is the quoted column name.  LIMIT: a number or nil.  PROJECTED: t after
-select/reject; then the query names its columns.  TITLE: the pipe so far."
-  file table columns inner wheres order limit projected title)
+select/reject; then the query names its columns.  TITLE: the pipe so far.
+SOURCE: (SQL . PARAMS) of a query this one reads from instead of TABLE
+\(after join and group-by); its columns are named by their keys.
+ROW-FN: a function that turns each fetched row into the row object
+\(groups), or nil."
+  file table columns inner wheres order limit projected title source row-fn)
 
 (defun qss-sqlite (file &optional table)
   "Return the table TABLE of the SQLite file FILE as a query.
@@ -238,7 +242,9 @@ The slots to set are in CHANGES, a property list of slot keywords and values."
         (:order (setf (qss-relation-order new) (pop changes)))
         (:limit (setf (qss-relation-limit new) (pop changes)))
         (:columns (setf (qss-relation-columns new) (pop changes)))
-        (:projected (setf (qss-relation-projected new) (pop changes)))))
+        (:projected (setf (qss-relation-projected new) (pop changes)))
+        (:source (setf (qss-relation-source new) (pop changes)))
+        (:row-fn (setf (qss-relation-row-fn new) (pop changes)))))
     new))
 
 (defun qss-sql--wrap (rel)
@@ -356,9 +362,11 @@ numbers where `qss-sql--quantities-p' says so."
 
 ;;; Relation -> SQL
 
-(defun qss-sql-query (rel)
-  "Return (SQL . PARAMS) of the query REL."
-  (let* ((inner (and (qss-relation-inner rel) (qss-sql-query (qss-relation-inner rel))))
+(defun qss-sql-query (rel &optional select)
+  "Return (SQL . PARAMS) of the query REL.
+SELECT, if given, replaces the list of columns (e.g. \"rowid\")."
+  (let* ((inner (cond ((qss-relation-inner rel) (qss-sql-query (qss-relation-inner rel)))
+                      ((qss-relation-source rel))))
          (from (if inner
                    (format "(\n%s\n) AS t" (replace-regexp-in-string "^" "  " (car inner)))
                  (qss-sql-quote (qss-relation-table rel))))
@@ -366,10 +374,12 @@ numbers where `qss-sql--quantities-p' says so."
          (order (qss-relation-order rel))
          (limit (qss-relation-limit rel)))
     (cons (concat "SELECT "
-                  (if (qss-relation-projected rel)
-                      (mapconcat (lambda (c) (qss-sql-quote (nth 1 c)))
-                                 (qss-relation-columns rel) ", ")
-                    "*")
+                  (cond
+                   (select select)
+                   ((qss-relation-projected rel)
+                    (mapconcat (lambda (c) (qss-sql-quote (nth 1 c)))
+                               (qss-relation-columns rel) ", "))
+                   (t "*"))
                   "\nFROM " from
                   (when wheres
                     (concat "\nWHERE " (mapconcat #'car wheres "\n  AND ")))
@@ -385,19 +395,57 @@ numbers where `qss-sql--quantities-p' says so."
                   (apply #'append (mapcar #'cdr wheres))
                   (and limit (list limit))))))
 
+(defvar qss-sql--rowids (make-hash-table :test #'eq :weakness 'key)
+  "Row -> its rowid, for rows fetched straight from a table.
+Editing (qss-edit.el) and `qss-sql-rowid' use it.")
+
+(defun qss-sql-rowid (row)
+  "Return the rowid of ROW, fetched from an SQLite table, or nil."
+  (gethash row qss-sql--rowids))
+
+(defun qss-sql--direct-p (rel)
+  "Return non-nil if REL reads straight from its table (no subquery)."
+  (not (or (qss-relation-inner rel) (qss-relation-source rel))))
+
+(defun qss-sql--real-table-p (db rel)
+  "Return non-nil if the table of REL is a table in DB (not a view)."
+  (equal (caar (sqlite-select db "SELECT type FROM sqlite_master WHERE name = ? COLLATE NOCASE"
+                              (vector (qss-relation-table rel))))
+         "table"))
+
 (defun qss-sql--run (rel &optional limit)
-  "Return the rows of REL as property lists; with LIMIT at most that many."
-  (let* ((q (qss-sql-query (if limit
-                               (if (and (qss-relation-limit rel) (<= (qss-relation-limit rel) limit))
-                                   rel
-                                 (qss-sql--copy (if (qss-relation-limit rel) (qss-sql--wrap rel) rel)
-                                                "" :limit limit))
-                             rel)))
+  "Return the rows of REL as property lists; with LIMIT at most that many.
+Rows straight from a table remember their rowid (`qss-sql-rowid')."
+  (let* ((run (if limit
+                  (if (and (qss-relation-limit rel) (<= (qss-relation-limit rel) limit))
+                      rel
+                    (qss-sql--copy (if (qss-relation-limit rel) (qss-sql--wrap rel) rel)
+                                   "" :limit limit))
+                rel))
          (keys (mapcar (lambda (c) (intern (format ":%s" (car c))))
                        (qss-relation-columns rel))))
     (qss-sql--with-db db (qss-relation-file rel)
-      (mapcar (lambda (row) (cl-mapcan #'list keys row))
-              (sqlite-select db (car q) (vconcat (cdr q)))))))
+      (let* ((with-rowid (and (qss-sql--direct-p run) (qss-sql--real-table-p db rel)))
+             (q (qss-sql-query run (and with-rowid
+                                        (concat "rowid, "
+                                                (if (qss-relation-projected run)
+                                                    (mapconcat (lambda (c) (qss-sql-quote (nth 1 c)))
+                                                               (qss-relation-columns run) ", ")
+                                                  "*")))))
+             (raw (condition-case nil
+                      (sqlite-select db (car q) (vconcat (cdr q)))
+                    ;; a table WITHOUT ROWID: no rowids, no editing
+                    (error (setq with-rowid nil)
+                           (let ((q (qss-sql-query run)))
+                             (sqlite-select db (car q) (vconcat (cdr q)))))))
+             (rows (mapcar (lambda (r)
+                             (let ((row (cl-mapcan #'list keys (if with-rowid (cdr r) r))))
+                               (when with-rowid (puthash row (car r) qss-sql--rowids))
+                               row))
+                           raw)))
+        (if (qss-relation-row-fn rel)
+            (mapcar (qss-relation-row-fn rel) rows)
+          rows)))))
 
 (defun qss-sql--specs (rel rows)
   "Return the column specs of REL for ROWS.
@@ -408,10 +456,11 @@ numbers.  Times are stored as text and stay text."
             (let* ((key (car col))
                    (qss-type (nth 3 col))
                    (kw (intern (format ":%s" key))))
+              (ignore kw)
               (cond ((memq qss-type '(size duration number)) (list key :type qss-type))
                     ((and rows
-                          (cl-some (lambda (r) (plist-get r kw)) rows)
-                          (cl-every (lambda (r) (let ((v (plist-get r kw))) (or (null v) (numberp v))))
+                          (cl-some (lambda (r) (qss-field r key)) rows)
+                          (cl-every (lambda (r) (let ((v (qss-field r key))) (or (null v) (numberp v))))
                                     rows))
                      (list key :type 'number))
                     (t key))))
@@ -489,7 +538,9 @@ numbers.  Times are stored as text and stay text."
   (dolist (k keys) (qss-sql--column rel k))   ; do they exist?
   (qss-sql--copy rel stage
                  :columns (mapcar (lambda (k) (assq k (qss-relation-columns rel))) keys)
-                 :projected t))
+                 :projected t
+                 ;; the rows are plain data again, no groups
+                 :row-fn nil))
 
 (cl-defmethod qss-select ((rel qss-relation) &rest cols)
   "Select the columns COLS in the SQL of REL."
@@ -510,6 +561,136 @@ numbers.  Times are stored as text and stay text."
   (qss-make-table (format "%s | columns" (qss-relation-title rel))
                   (mapcar (lambda (c) (list :column (nth 0 c) :name (nth 1 c) :type (nth 2 c)))
                           (qss-relation-columns rel))))
+
+;;; ------------------------------------------------------------------
+;;; Join and group-by as SQL
+
+(defun qss-sql--from-query (rel stage columns select tail &optional extra-params)
+  "Return a query over REL: SELECT SELECT FROM (REL) AS t TAIL.
+COLUMNS are the columns of the new query, named by their keys; STAGE
+extends the title.  EXTRA-PARAMS come after those of REL."
+  (let ((q (qss-sql-query rel)))
+    (qss-relation--make
+     :file (qss-relation-file rel) :table (qss-relation-table rel)
+     :columns columns :projected t
+     :title (format "%s | %s" (qss-relation-title rel) stage)
+     :source (cons (format "SELECT %s\nFROM (\n%s\n) AS t%s" select
+                           (replace-regexp-in-string "^" "  " (car q)) tail)
+                   (append (cdr q) extra-params)))))
+
+(cl-defmethod qss-join ((rel qss-relation) other &rest options)
+  "Join the query REL with OTHER in SQL, if OTHER is a query of the same file.
+Otherwise in memory."
+  (if (not (and (qss-relation-p other)
+                (equal (qss-relation-file other) (qss-relation-file rel))))
+      (cl-call-next-method)
+    (pcase-let* ((`(,on . ,kind) (qss--join-args options))
+                 (left-names (mapcar #'car (qss-relation-columns rel)))
+                 (right-names (mapcar #'car (qss-relation-columns other)))
+                 (pairs (qss--join-on on left-names right-names))
+                 (right-cols (qss--join-columns left-names right-names pairs))
+                 (lq (qss-sql-query rel))
+                 (rq (qss-sql-query other))
+                 (lcol (lambda (k) (qss-sql-quote (nth 1 (assq k (qss-relation-columns rel))))))
+                 (rcol (lambda (k) (qss-sql-quote (nth 1 (assq k (qss-relation-columns other)))))))
+      (qss-relation--make
+       :file (qss-relation-file rel) :table (qss-relation-table rel) :projected t
+       :columns (append (mapcar (lambda (c) (list (car c) (symbol-name (car c)) (nth 2 c) (nth 3 c)))
+                                (qss-relation-columns rel))
+                        (mapcar (lambda (c)
+                                  (let ((col (assq (car c) (qss-relation-columns other))))
+                                    (list (cdr c) (symbol-name (cdr c)) (nth 2 col) (nth 3 col))))
+                                right-cols))
+       :title (format "%s | join %s%s" (qss-relation-title rel) (qss-relation-title other)
+                      (if (eq kind 'left) " (left)" ""))
+       :source (cons (format "SELECT %s\nFROM (\n%s\n) AS l\n%s (\n%s\n) AS r\nON %s"
+                             (mapconcat #'identity
+                                        (append
+                                         (mapcar (lambda (k) (format "l.%s AS %s" (funcall lcol k)
+                                                                     (qss-sql-quote (symbol-name k))))
+                                                 left-names)
+                                         (mapcar (lambda (c) (format "r.%s AS %s" (funcall rcol (car c))
+                                                                     (qss-sql-quote (symbol-name (cdr c)))))
+                                                 right-cols))
+                                        ", ")
+                             (replace-regexp-in-string "^" "  " (car lq))
+                             (if (eq kind 'left) "LEFT JOIN" "JOIN")
+                             (replace-regexp-in-string "^" "  " (car rq))
+                             (mapconcat (lambda (p) (format "l.%s = r.%s" (funcall lcol (car p))
+                                                            (funcall rcol (cdr p))))
+                                        pairs " AND "))
+                     (append (cdr lq) (cdr rq)))))))
+
+(defun qss-sql--group (rel keys aggs stage)
+  "Return REL grouped by KEYS with AGGS, as a query; STAGE is the title.
+The rows are groups (`qss-group') whose rows a query of their own fetches."
+  (dolist (k keys) (qss-sql--column rel k))
+  (dolist (a aggs) (qss-sql--column rel (nth 1 a)))
+  (let* ((col (lambda (k) (qss-sql--column rel k)))
+         (type-of-col (lambda (k) (assq k (qss-relation-columns rel))))
+         (agg-sql (lambda (a)
+                    (format "%s(%s) AS %s" (upcase (symbol-name (car a))) (funcall col (nth 1 a))
+                            (qss-sql-quote (symbol-name (nth 2 a))))))
+         (agg-type (lambda (a)
+                     (let* ((c (funcall type-of-col (nth 1 a)))
+                            (qtype (nth 3 c))
+                            (numeric (eq (qss-sql--affinity (nth 2 c)) 'numeric)))
+                       (pcase (car a)
+                         ('count 'number)
+                         ((or 'sum 'avg) (if (memq qtype '(size duration)) qtype 'number))
+                         (_ (or qtype (and numeric 'number)))))))
+         (columns (append (mapcar (lambda (k) (let ((c (funcall type-of-col k)))
+                                                (list k (symbol-name k) (nth 2 c) (nth 3 c))))
+                                  keys)
+                          (list (list 'count "count" "INTEGER" 'number))
+                          (mapcar (lambda (a) (list (nth 2 a) (symbol-name (nth 2 a)) ""
+                                                    (funcall agg-type a)))
+                                  aggs)))
+         (specs (mapcar (lambda (c) (if (nth 3 c) (list (car c) :type (nth 3 c)) (car c))) columns))
+         (row-columns (qss-sql--specs rel nil))
+         (base rel)
+         (grouped (qss-sql--from-query
+                   rel stage columns
+                   (mapconcat #'identity
+                              (append (mapcar (lambda (k) (format "%s AS %s" (funcall col k)
+                                                                  (qss-sql-quote (symbol-name k))))
+                                              keys)
+                                      (list "COUNT(*) AS \"count\"")
+                                      (mapcar agg-sql aggs))
+                              ", ")
+                   (if keys
+                       (format "\nGROUP BY %s" (mapconcat col keys ", "))
+                     ""))))
+    (setf (qss-relation-row-fn grouped)
+          (lambda (row)
+            (qss--make-group
+             :keys (mapcar (lambda (k) (cons k (plist-get row (intern (format ":%s" k))))) keys)
+             :count (plist-get row :count)
+             :aggs (mapcar (lambda (a) (cons (nth 2 a) (plist-get row (intern (format ":%s" (nth 2 a))))))
+                           aggs)
+             :source base
+             :specs (mapcar #'qss--column-spec specs)
+             :row-columns row-columns
+             :title (if keys
+                        (mapconcat (lambda (k) (format "%s = %s" k (plist-get row (intern (format ":%s" k)))))
+                                   keys ", ")
+                      "all rows"))))
+    ;; sorted by the keys, missing values last, as in memory
+    (setf (qss-relation-order grouped)
+          (mapcar (lambda (k) (list k nil (qss-sql-quote (symbol-name k)))) keys))
+    grouped))
+
+(cl-defmethod qss-group-by ((rel qss-relation) &rest args)
+  "Group the query REL by ARGS in SQL (GROUP BY)."
+  (pcase-let ((`(,keys . ,aggs) (qss--group-args args)))
+    (unless keys (user-error "group-by needs a column; for all rows use summarize"))
+    (qss-sql--group rel keys aggs (qss--group-stage "group-by" args))))
+
+(cl-defmethod qss-summarize ((rel qss-relation) &rest aggs)
+  "Summarize the query REL by AGGS in SQL."
+  (pcase-let ((`(,keys . ,aggs*) (qss--group-args aggs)))
+    (when keys (user-error "summarize takes only aggregates such as (sum amount); for groups use group-by"))
+    (qss-sql--group rel nil aggs* (qss--group-stage "summarize" aggs))))
 
 (defun qss-sql (rel)
   "Return the query REL as text with its parameters."
