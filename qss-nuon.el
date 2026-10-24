@@ -176,8 +176,9 @@ thousands of rows, and this keeps the nanoseconds."
                        (* 3600 (n 4)) (* 60 (n 5)) (n 6))
                     zone)))
       (if fraction
+          ;; in the form of `qss-time': .000000000 is a whole second
           (let ((hz (expt 10 (length fraction))))
-            (cons (+ (* secs hz) (string-to-number fraction)) hz))
+            (qss--canonical-time (cons (+ (* secs hz) (string-to-number fraction)) hz)))
         (list (ash secs -16) (logand secs 65535))))))
 
 (defun qss-nuon--token-value (text)

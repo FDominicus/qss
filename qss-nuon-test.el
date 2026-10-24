@@ -17,7 +17,7 @@
 
 (defun qss-nuon-test--time (text)
   "Return TEXT as a Lisp time."
-  (encode-time (iso8601-parse text)))
+  (qss-time (encode-time (iso8601-parse text))))
 
 (ert-deftest qss-nuon-read-scalars ()
   (should (equal (qss-nuon-read "42") 42))
@@ -63,12 +63,12 @@
   (should (equal (qss-nuon-read "-5sec") (qss-nuon-duration -5000000000)))
   (should (time-equal-p (qss-nuon-read "2026-10-22T14:40:00+02:00")
                         (qss-nuon-test--time "2026-10-22T14:40:00+02:00")))
-  ;; the nanoseconds stay
+  ;; the nanoseconds stay (in lowest terms, as `qss-time' makes them)
   (should (equal (qss-nuon-read "2026-10-22T14:40:36.744546788+02:00")
-                 (cons (+ (* (time-convert (qss-nuon-test--time "2026-10-22T14:40:36+02:00") 'integer)
-                             1000000000)
-                          744546788)
-                       1000000000)))
+                 (qss-time (cons (+ (* (time-convert (qss-nuon-test--time "2026-10-22T14:40:36+02:00") 'integer)
+                                       1000000000)
+                                    744546788)
+                                 1000000000))))
   (should (time-equal-p (qss-nuon-read "2026-10-22") (qss-nuon-test--time "2026-10-22T00:00:00Z")))
   (should (equal (qss-nuon-read "[1..5, 1..<5, 1..3..10, 1..]") '("1..5" "1..<5" "1..3..10" "1..")))
   (should (equal (qss-nuon-read "0x[01FF]") (unibyte-string 1 255)))
@@ -186,6 +186,17 @@
     ;; in a single record the value column shows the types readably
     (should (equal (qss-collect (qss-nu "{s: 2048b, d: 90min}"))
                    '((:column s :value "2k") (:column d :value "1hr 30min"))))))
+
+(ert-deftest qss-nuon-time-same-form-as-qss-time ()
+  "The NUON reader and qss-time make the same form, so equal times are equal."
+  (should (equal (qss-time (encode-time (iso8601-parse "2026-10-22T10:00:00+02:00")))
+                 (qss-nuon--time "2026-10-22T10:00:00+02:00")))
+  (should (equal (qss-time (time-add (encode-time (iso8601-parse "2026-10-22T10:00:00+02:00"))
+                                     '(1 . 2)))
+                 (qss-nuon--time "2026-10-22T10:00:00.5+02:00")))
+  ;; nine zeros from Nushell are a whole second
+  (should (equal (qss-nuon--time "2026-10-22T10:00:00.000000000+02:00")
+                 (qss-nuon--time "2026-10-22T10:00:00+02:00"))))
 
 (ert-deftest qss-nuon-round-trip-through-nushell ()
   "Tables go to Nushell and back with all their types."

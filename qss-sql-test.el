@@ -426,7 +426,7 @@ The real central database is never touched."
 (ert-deftest qss-into-sqlite-values ()
   "Integers, reals, times, t, symbols and lists are stored sensibly."
   (qss-stest--with-central dir
-    (let* ((time (encode-time '(5 11 7 22 10 2026 nil -1 nil)))
+    (let* ((time (qss-time '(5 11 7 22 10 2026 nil -1 nil)))
            (file (expand-file-name "other.db" dir))
            (rel (qss-> (list (list :i 1 :r 1.5 :when time :flag t :kind 'dir :list '(1 "a") :empty nil)
                              (list :i 2 :r 2 :when nil :flag nil :kind nil :list nil :empty nil))

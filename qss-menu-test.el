@@ -83,7 +83,7 @@
   ;; a list cannot be written in a condition: only the column words
   (should (equal (car (qss--value-stages 'x '("a" "b") '(x))) '(sort-by x)))
   ;; a time: the day, not the exact moment
-  (let ((stages (qss--value-stages 'modified (encode-time '(0 30 23 31 12 2026 nil -1 nil))
+  (let ((stages (qss--value-stages 'modified (qss-time '(0 30 23 31 12 2026 nil -1 nil))
                                    '(modified :type time))))
     (should (equal (car stages)
                    '(where (and (>= :modified "2026-12-31") (< :modified "2027-01-01")))))))

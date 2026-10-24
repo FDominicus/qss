@@ -58,6 +58,19 @@
   (should-not (qss-op-like nil "%"))
   (should-error (qss-op-< 1 "a") :type 'user-error))
 
+(ert-deftest qss-time-is-never-a-number ()
+  "A time of whole seconds stays a time, also where Emacs gives an integer."
+  (dolist (time (list (qss-time "2026-10-20") (qss-time '(0 0 0 20 10 2026 nil -1 nil))
+                      (qss-time 1792474200) (qss-time '(1792474200 . 1))))
+    (should (qss--time-p time))
+    (should-not (numberp time)))
+  (should (time-equal-p (qss-time 1792474200) 1792474200))
+  ;; one form: equal times are equal
+  (should (equal (qss-time '(1792656000 . 1)) (qss-time 1792656000)))
+  (should (equal (qss-time '(27353 49792 0 0)) '(27353 49792)))
+  (should (equal (qss-time '(17926560005 . 10)) '(3585312001 . 2)))     ; lowest terms
+  (should (equal (qss-time "2026-10-20 07:30") (qss--to-time "2026-10-20 07:30"))))
+
 (ert-deftest qss-op-times ()
   (let ((t1 (qss--to-time "2026-10-20"))
         (t2 (qss--to-time "2026-10-20 07:30")))
@@ -320,7 +333,7 @@
       (should-error (qss-to tab 'xml) :type 'user-error))))
 
 (ert-deftest qss-to-csv-quoting-and-times ()
-  (let* ((time (encode-time '(5 11 7 22 10 2026 nil -1 nil)))
+  (let* ((time (qss-time '(5 11 7 22 10 2026 nil -1 nil)))
          (tab (qss-make-table "t" (list (list :text "say \"hi\"\nnow" :when time))
                               '(text (when :type time)))))
     (should (equal (qss-to tab 'csv) "text,when\n\"say \"\"hi\"\"\nnow\",2026-10-22 07:11:05\n"))

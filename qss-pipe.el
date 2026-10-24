@@ -126,15 +126,41 @@ AGAIN is a function that applies the same word to TABLE read anew."
   (and (consp v) (integerp (car v))
        (or (integerp (cdr v)) (and (consp (cdr v)) (integerp (cadr v))))))
 
+(defun qss-time (time)
+  "Return TIME as a Lisp time that qss sees as a time, not as a number.
+TIME is a text like \"2026-10-20 07:30\" (see `qss--to-time'), a
+decoded time (a list of nine as from `decode-time'), or a Lisp time.
+Emacs may give a time of whole seconds as a plain integer (Emacs 32's
+`encode-time' does); qss could not tell that from a number.  So its
+times are (HIGH LOW), or (TICKS . HZ) with a fraction of a second, the
+forms the NUON reader makes too (`qss--canonical-time')."
+  (cond ((stringp time) (qss--to-time time))
+        ((and (proper-list-p time) (= (length time) 9)) (qss--canonical-time (encode-time time)))
+        (t (qss--canonical-time time))))
+
+(defun qss--canonical-time (time)
+  "Return TIME in the one form qss uses, so that equal times are `equal'.
+Whole seconds: (HIGH LOW); with a fraction: (TICKS . HZ) in lowest
+terms, so that 10.5 s is always (21 . 2).  Neither is a plain number.
+The NUON reader makes its times the same way."
+  (let* ((tc (time-convert time t))
+         (g (cl-gcd (car tc) (cdr tc)))
+         (ticks (/ (car tc) g))
+         (hz (/ (cdr tc) g)))
+    (if (= hz 1)
+        (list (ash ticks -16) (logand ticks 65535))
+      (cons ticks hz))))
+
 (defun qss--to-time (s)
   "Return text S like \"2026-10-20\" or \"2026-10-20 07:30\" as a Lisp time.
-The time is local time."
-  (condition-case nil
-      (encode-time (decoded-time-set-defaults
-                    (iso8601-parse (string-replace " " "T" s))))
-    (error (condition-case nil
-               (encode-time (decoded-time-set-defaults (iso8601-parse-date s)))
-             (error (user-error "Not a date: %S" s))))))
+The time is local time, in the form of `qss-time'."
+  (qss--canonical-time
+   (condition-case nil
+       (encode-time (decoded-time-set-defaults
+                     (iso8601-parse (string-replace " " "T" s))))
+     (error (condition-case nil
+                (encode-time (decoded-time-set-defaults (iso8601-parse-date s)))
+              (error (user-error "Not a date: %S" s)))))))
 
 (defun qss--compare (a b)
   "Return -1, 0 or 1 comparing A with B; nil if A or B is missing (NULL)."

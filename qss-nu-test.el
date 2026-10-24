@@ -62,7 +62,7 @@
 
 (ert-deftest qss-nu-table-json ()
   "Tables go to Nushell as JSON objects with the columns of the table."
-  (let* ((time (encode-time (iso8601-parse "2026-10-22T10:00:00+02:00")))
+  (let* ((time (qss-time (encode-time (iso8601-parse "2026-10-22T10:00:00+02:00"))))
          (tab (qss-make-table "t" (list (list :name "a" :size 2048 :when time :ok t :none nil
                                               :nested '(:x 1))
                                         (list :name "b" :size 10 :when time :ok nil :none nil
