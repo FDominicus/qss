@@ -109,6 +109,7 @@ describes the type."
                                                           (qss-> (processes) (where (= :pid n))))))))
                               "A system process.")
 (qss-define-presentation-type 'db-table 'object nil "A table of an SQLite file.")
+(qss-define-presentation-type 'line 'object nil "A line of a file (`lines').")
 (qss-define-presentation-type 'row 'object nil "A row of data (a property list).")
 (qss-define-presentation-type 'value t
                               (lambda (text) (or (qss--parse-number text) text))
@@ -168,6 +169,14 @@ The parser of TYPE or of the nearest supertype that has one is used."
 (cl-defmethod qss-presentation-type ((_object qss-process))
   "A process row is a `process'."
   'process)
+
+(cl-defmethod qss-presentation-type ((_object qss-line))
+  "A row of `lines' is a `line'."
+  'line)
+
+(cl-defmethod qss-presentation-label ((object qss-line))
+  "Return the line row as FILE:NUMBER."
+  (format "%s:%d" (file-name-nondirectory (qss-line-file object)) (qss-line-number object)))
 
 (cl-defmethod qss-presentation-type ((_object qss-db-table))
   "A row of `tables' is a `db-table'."

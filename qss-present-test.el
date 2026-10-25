@@ -341,5 +341,18 @@
                 (should (equal args (list (concat dir "new.txt") (concat dir "old.txt"))))))
           (kill-buffer buf))))))
 
+;;; lines
+
+(ert-deftest qss-present-line-rows ()
+  "A row of `lines' is a `line', below `object', labelled FILE:NUMBER."
+  (let ((file (make-temp-file "qss-pline-" nil ".txt" "one\ntwo\n")))
+    (unwind-protect
+        (let ((row (cadr (qss-table-rows (qss-lines file)))))
+          (should (eq (qss-presentation-type row) 'line))
+          (should (qss-presentation-subtype-p 'line 'object))
+          (should (equal (qss-presentation-label row)
+                         (concat (file-name-nondirectory file) ":2"))))
+      (delete-file file))))
+
 (provide 'qss-present-test)
 ;;; qss-present-test.el ends here

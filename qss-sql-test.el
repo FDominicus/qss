@@ -200,7 +200,11 @@ the mapping of names to keys."
     (should (= 5 (qss-> (sqlite qss-stest--file "HT_Kunden") count)))
     (should (= 2 (qss-> (qss-stest--k) (where (= :ort "Bruchsal")) count)))
     (should (= 3 (qss-> (qss-stest--k) (first 3) count)))
-    (should (= 1 (qss-> (qss-stest--k) (first 2) (where (= :ort "Bruchsal")) count)))))
+    (should (= 1 (qss-> (qss-stest--k) (first 2) (where (= :ort "Bruchsal")) count)))
+    ;; head and length stay a query: LIMIT and COUNT in the SQL
+    (should (= 5 (qss-> (qss-stest--k) length)))
+    (should (string-search "LIMIT ?" (qss-> (qss-stest--k) (head 2) sql)))
+    (should (= 2 (qss-> (qss-stest--k) (head 2) length)))))
 
 (ert-deftest qss-sql-select-projects ()
   "Select cuts down, in the SQL and in the rows; what is cut is gone."

@@ -545,6 +545,16 @@ Sorting uses the raw value; missing values always come last.")
   "Count the rows of TABLE in memory."
   (length (qss-table-rows (qss-as-table table))))
 
+(defun qss-head (table &optional n)
+  "Return the first N rows of TABLE (default 10), as `qss-first' does.
+The name and the default come from clsh; Nushell says `first'."
+  (qss-first table (or n 10)))
+
+(defun qss-length (table)
+  "Return the number of rows of TABLE, as `qss-count' does.
+The name comes from Nushell."
+  (qss-count table))
+
 (cl-defgeneric qss-collect (table)
   "Return the rows of TABLE as a Lisp list, at the end of a pipe.
 Data rows are property lists; files and processes are the objects
@@ -947,7 +957,8 @@ TARGET.")
 ;;; qss->: chaining the words
 
 (defvar qss-sources
-  '((files . qss-files) (processes . qss-processes) (run . qss-run))
+  '((files . qss-files) (processes . qss-processes) (run . qss-run)
+    (lines . qss-lines))
   "Sources that may start a `qss->' pipe without the qss- prefix.")
 
 (defvar qss--words
@@ -955,8 +966,8 @@ TARGET.")
     (select . columns) (reject . columns) (get . columns) (group-by . columns)
     (summarize . columns) (join . join)
     (sort-by . columns)
-    (first . values) (last . values)
-    (count . none) (columns . none) (collect . none)
+    (first . values) (last . values) (head . values)
+    (count . none) (length . none) (columns . none) (collect . none)
     (to . columns) (into . into)
     (each . function))
   "Words of `qss->' and how their arguments are read.")

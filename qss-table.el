@@ -655,6 +655,61 @@ the title says so."
                     (lambda () (let ((default-directory dir)) (apply #'qss-run program args))))))
 
 ;;; ------------------------------------------------------------------
+;;; Source: the lines of a file
+
+(cl-defstruct (qss-line (:constructor qss-line--make) (:copier nil))
+  "A line of a file: the FILE, its NUMBER (from 1) and its TEXT."
+  file number text)
+
+(defun qss-lines (file)
+  "Return the lines of FILE as a table: columns `number' and `line'.
+The column `line' is named as in `qss-run', so the same conditions work
+on both; `(where (like :line \"%error%\"))' is grep.  RET on a row
+visits the file at that line."
+  (let* ((file (expand-file-name file))
+         (text (with-temp-buffer
+                 (insert-file-contents file)
+                 (buffer-string)))
+         (lines (split-string text "\n")))
+    ;; the newline after the last line does not start another line
+    (when (and lines (equal (car (last lines)) ""))
+      (setq lines (butlast lines)))
+    (qss-make-table (format "lines %s" (abbreviate-file-name file))
+                    (cl-loop for l in lines for i from 1
+                             collect (qss-line--make :file file :number i :text l))
+                    (qss-columns (qss-line--make))
+                    (lambda () (qss-lines file)))))
+
+(cl-defmethod qss-columns ((_row qss-line))
+  "Return the columns of a line row."
+  '((number :type number) line))
+
+(cl-defmethod qss-field ((row qss-line) name)
+  "Return field NAME of the line ROW."
+  (pcase name
+    ('number (qss-line-number row))
+    ('line (qss-line-text row))
+    ('file (qss-line-file row))))
+
+(cl-defmethod qss-stored-fields ((_row qss-line))
+  "A stored line keeps its file."
+  '(file))
+
+(cl-defmethod qss-default-action ((row qss-line))
+  "Visit the file of ROW at its line."
+  (find-file (qss-line-file row))
+  (goto-char (point-min))
+  (forward-line (1- (qss-line-number row))))
+
+(cl-defmethod qss-actions ((row qss-line))
+  "Return the actions for the line ROW."
+  (ignore row)
+  (list (cons "Open at line" #'qss-default-action)
+        (cons "Copy line" (lambda (r) (kill-new (qss-line-text r))
+                            (message "%s" (qss-line-text r))))
+        (cons "Describe" #'qss-describe)))
+
+;;; ------------------------------------------------------------------
 ;;; Commands
 
 ;;;###autoload

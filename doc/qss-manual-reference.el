@@ -9,7 +9,7 @@
 ;; so it cannot fall behind: options, faces, words, sources,
 ;; presentation types, commands and contracts.
 ;;
-;;   emacs --batch -L .. -l qss-manual-reference.el -f qss-manual-write-reference
+;;   emacs --batch -L . -L .. -l qss-manual-reference.el -f qss-manual-write-reference
 ;;
 ;; writes reference.tex, version.tex and the parts of the example
 ;; (example-N.el.txt) next to this file; qss-manual.tex includes them.

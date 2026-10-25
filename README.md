@@ -132,6 +132,7 @@ Or clone the repository, put the directory on your `load-path` and
 | `(tables [FILE])` | the tables of an SQLite file (default `qss-database`); `RET` shows the rows |
 | `(nu COMMAND)` | the result of a Nushell command |
 | `(run PROGRAM ARGS...)` | the output lines of a program (column `line`), no shell |
+| `(lines FILE)` | the lines of a file (columns `number` and `line`); `RET` visits the line |
 | any list | its elements; property lists are rows, other values have the column `value` |
 
 ### Nushell
@@ -190,7 +191,8 @@ else works.
 | `(where COND)` | rows for which COND holds; `filter` is the same |
 | `(select COL...)` / `(reject COL...)` | keep / drop columns |
 | `(sort-by COL [:desc])` | sort; missing values last |
-| `(first [N])` / `(last [N])` | the first / last N rows |
+| `(first [N])` / `(last [N])` | the first / last N rows (default 1) |
+| `(head [N])` | the first N rows, default 10 (as in clsh) |
 | `(get COL)` | the values of one column |
 | `(group-by COL... AGG...)` | one row per group: the keys, `count` and aggregates such as `(sum amount)`; `RET` shows the group |
 | `(summarize AGG...)` | one row: `count` and the aggregates over all rows |
@@ -202,7 +204,7 @@ else works.
 | `(to FORMAT)` | the table as text: `text`, `org`, `md`, `csv`, `tsv` |
 | `(into sqlite NAME ...)` | store the table in SQLite; go on with it as a query (see below) |
 | `columns` | the column names |
-| `count` | the number of rows |
+| `count` / `length` | the number of rows (`length` as in Nushell) |
 | `collect` | the rows as a Lisp list |
 | `sql` | the SQL of a query (SQLite only) |
 

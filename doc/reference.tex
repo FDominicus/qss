@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.13.2.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.13.3.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -14,9 +14,11 @@
 \code{first} & \code{qss-first} & Return the first N rows of TABLE (default 1). \\
 \code{get} & \code{qss-get} & Return the values of column COL of TABLE as a table with one column. \\
 \code{group-by} & \code{qss-group-by} & Group the rows of TABLE by the columns in ARGS, with aggregates. \\
+\code{head} & \code{qss-head} & Return the first N rows of TABLE (default 10), as \code{qss-first} does. \\
 \code{into} & \code{qss-into} & Store TABLE in TARGET (a symbol) and return what was stored, as a source. \\
 \code{join} & \code{qss-join} & Join TABLE with OTHER: rows whose join columns are equal, side by side. \\
 \code{last} & \code{qss-last} & Return the last N rows of TABLE (default 1). \\
+\code{length} & \code{qss-length} & Return the number of rows of TABLE, as \code{qss-count} does. \\
 \code{nu} & \code{qss-nu-pipe} & Send TABLE through the Nushell COMMAND and return the result. \\
 \code{reject} & \code{qss-reject} & Return TABLE with all columns except COLS (cut down as in \code{qss-select}). \\
 \code{select} & \code{qss-select} & Return TABLE with only the columns COLS. \\
@@ -36,6 +38,7 @@
 \endhead
 \code{contracts} & \code{qss-contracts} & Return a table of the functions with a contract and their contracts. \\
 \code{files} & \code{qss-files} & Return a table of the files in DIR (default \code{default-directory}). \\
+\code{lines} & \code{qss-lines} & Return the lines of FILE as a table: columns \code{number} and \code{line}. \\
 \code{nu} & \code{qss-nu} & Run the Nushell COMMAND and return its result as a table. \\
 \code{processes} & \code{qss-processes} & Return a table of the running processes (from \code{process-attributes}). \\
 \code{run} & \code{qss-run} & Run PROGRAM with ARGS, without a shell, and return its output as a table. \\
@@ -101,6 +104,7 @@ All options are in the customization group \code{qss} (\code{M-x customize-group
 \code{duration} & \code{integer} & yes & A duration in nanoseconds; \enquote{3hr} can be typed. \\
 \code{file} & \code{object} & yes & A file or directory. \\
 \code{integer} & \code{number} & yes & A whole number. \\
+\code{line} & \code{object} &  & A line of a file (\code{lines}). \\
 \code{number} & \code{value} & yes & A number. \\
 \code{object} & \code{t} &  & Something with actions: a row object. \\
 \code{process} & \code{object} & yes & A system process. \\

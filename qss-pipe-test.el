@@ -344,5 +344,31 @@
     (let ((csv (qss-> (files dir) (where (= :name "b.el")) (select name size) (to csv))))
       (should (string-match-p "\\`name,size\nb\\.el,[0-9]+\n\\'" csv)))))
 
+;;; head, length, lines (taken over from clsh and Nushell)
+
+(ert-deftest qss-head-and-length ()
+  (let* ((rows (cl-loop for i from 1 to 12 collect (list :n i)))
+         (tab (qss-make-table "twelve" rows)))
+    (should (= 10 (qss-> tab head count)))
+    (should (equal (qss-> tab (head 3) (get n) collect) '(1 2 3)))
+    (should (= 12 (qss-> tab length)))
+    (should (= (qss-> tab count) (qss-> tab length)))
+    (should (= 2 (qss-> (qss-make-table "people" qss-ptest--people)
+                        (where (= :city "Bruchsal")) length)))))
+
+(ert-deftest qss-lines-of-a-file ()
+  (let ((file (make-temp-file "qss-lines-" nil ".txt"
+                              "alpha error one\nbeta ok\ngamma error two\n")))
+    (unwind-protect
+        (let ((tab (qss-> (lines file))))
+          (should (equal (mapcar #'car (qss-table-columns tab)) '(number line)))
+          (should (= 3 (qss-> tab length)))   ; the last newline starts no line
+          (should (equal (qss-> tab (where (like :line "%error%")) (get number) collect)
+                         '(1 3)))
+          (should (equal (qss-field (car (qss-table-rows tab)) 'file) file))
+          (should (equal (qss-> (lines file) (sort-by number :desc) (first 1) (get line) collect)
+                         '("gamma error two"))))
+      (delete-file file))))
+
 (provide 'qss-pipe-test)
 ;;; qss-pipe-test.el ends here
