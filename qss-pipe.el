@@ -85,6 +85,7 @@ words can still become SQL."
 
 (cl-defmethod qss-display ((value qss-table))
   "Show the table VALUE in a buffer."
+  (qss--check-whole value)
   (qss-show value))
 
 (defun qss--derive (table stage rows &optional columns again)
@@ -117,6 +118,34 @@ AGAIN is a function that applies the same word to TABLE read anew."
   "Return the column spec NAME of TABLE, or a plain one."
   (or (assq name (qss-table-columns table))
       (qss--column-spec name)))
+
+;; After a join a name both tables have is ambiguous (unless :suffix or
+;; :prefix renamed the other side): its column spec carries :ambiguous.
+;; Using such a name is an error, and so is showing the table with it;
+;; select or reject the other columns and the table is plain again.
+
+(defun qss--ambiguous-names (table)
+  "Return the names of the ambiguous columns of TABLE."
+  (cl-loop for spec in (qss-table-columns table)
+           when (and (consp spec) (plist-get (cdr spec) :ambiguous)) collect (car spec)))
+
+(defun qss--check-names (table names)
+  "Signal an error if one of NAMES is an ambiguous column of TABLE."
+  (let ((bad (cl-intersection (mapcar #'qss--name names) (qss--ambiguous-names table))))
+    (when bad
+      (qss--ambiguous-error bad))))
+
+(defun qss--ambiguous-error (names)
+  "Signal that NAMES are in both tables of a join."
+  (user-error "Column%s %s in both tables of the join: join with :suffix or :prefix, or select others"
+              (if (cdr names) "s" "") (mapconcat #'symbol-name names ", ")))
+
+(defun qss--check-whole (table)
+  "Signal an error if TABLE still has an ambiguous column.
+For showing or collecting the whole table."
+  (when (qss-table-p table)
+    (let ((bad (qss--ambiguous-names table)))
+      (when bad (qss--ambiguous-error bad)))))
 
 ;;; ------------------------------------------------------------------
 ;;; Comparisons with the meaning of SQL
@@ -223,15 +252,20 @@ The time is local time, in the form of `qss-time'."
                        (pcase c
                          (?% ".*")
                          (?_ ".")
+                         ;; ASCII letters in both cases, as SQLite; Ä stays Ä
+                         ((or (pred (lambda (c) (<= ?a c ?z))) (pred (lambda (c) (<= ?A c ?Z))))
+                          (format "[%c%c]" (downcase c) (upcase c)))
                          (_ (regexp-quote (char-to-string c)))))
                      pattern "")
           "\\'"))
 
 (defun qss-op-like (a pattern)
   "Return non-nil if A matches the SQL LIKE PATTERN.
-% is any number of characters, _ exactly one; case is ignored."
+% is any number of characters, _ exactly one; the case of ASCII
+letters is ignored, as in SQLite (\"b%\" finds \"Bert\", \"ä%\" does not
+find \"Ärger\")."
   (and (stringp a)
-       (let ((case-fold-search t))
+       (let ((case-fold-search nil))
          (string-match-p (qss--like-regexp pattern) a))
        t))
 
@@ -304,12 +338,33 @@ VALUES: the values, evaluated at run time, in the order of N."
         ((memq (car form) '(quote function)) form)
         ((memq (car form) qss--null-ops)
          `(qss--null-safe #',(alist-get (car form) qss--operators)
-                          ,@(mapcar #'qss--translate (cdr form))))
+                          ,@(let ((i 0))
+                              (mapcar (lambda (arg)
+                                        (setq i (1+ i))
+                                        (if (or (keywordp arg) (and (eq (car form) 'in) (= i 2)))
+                                            (qss--translate arg)
+                                          `(qss--value-arg ,(qss--translate arg) ',form)))
+                                      (cdr form)))))
         ((eq (car form) 'and) `(qss--and3 ,@(mapcar #'qss--translate (cdr form))))
         ((eq (car form) 'or) `(qss--or3 ,@(mapcar #'qss--translate (cdr form))))
         ((eq (car form) 'not) `(qss--not3 ,(qss--translate (cadr form))))
         (t (let ((op (alist-get (car form) qss--operators)))
              (cons (or op (car form)) (mapcar #'qss--translate (cdr form)))))))
+
+(defun qss--value-arg (value form)
+  "Return VALUE, a value in the condition FORM; nil there is an error.
+NULL is asked for with is-null, as in SQL, not with a value nil."
+  (if (null value)
+      (user-error "nil as a value in %S: use (is-null :column) for NULL" form)
+    value))
+
+(defun qss--condition-columns (form)
+  "Return the column names (keywords) FORM mentions, outside of quote."
+  (cond ((keywordp form) (list form))
+        ((and (consp form) (memq (car form) '(quote function))) nil)
+        ((consp form) (append (qss--condition-columns (car form))
+                              (qss--condition-columns (cdr form))))
+        (t nil)))
 
 (defun qss--mentions-column-p (form)
   "Return non-nil if a keyword (a column) occurs in FORM outside of quote."
@@ -431,6 +486,8 @@ The word filter, as in Nushell; methods are defined on `qss-where'.")
   "Filter the rows of TABLE in memory by COND."
   (let ((table (qss-as-table table))
         (pred (qss--predicate cond)))
+    (when (qss-condition-p cond)
+      (qss--check-names table (qss--condition-columns (qss-condition-form cond))))
     (qss--derive table (format "where %s" (qss--describe-condition cond))
                  (cl-remove-if-not pred (qss-table-rows table))
                  (qss-table-columns table)
@@ -474,6 +531,7 @@ and \\`a' keep working; only the display shows the selection, and
   "Keep the columns COLS of TABLE, in memory."
   (let* ((table (qss-as-table table))
          (names (mapcar #'qss--name cols)))
+    (qss--check-names table names)
     (qss--project table names
                   (format "select %s" (mapconcat #'symbol-name names " "))
                   (lambda (tab) (apply #'qss-select tab cols)))))
@@ -491,6 +549,10 @@ and \\`a' keep working; only the display shows the selection, and
                   (format "reject %s" (mapconcat #'symbol-name names " "))
                   (lambda (tab) (apply #'qss-reject tab cols)))))
 
+(defun qss--direction-p (x)
+  "Return non-nil if X is a sort direction, :asc or :desc (or asc, desc, -r)."
+  (memq x '(:asc asc :desc desc -r :r)))
+
 (defun qss--descending-p (dir)
   "Return non-nil if DIR asks for descending order."
   (pcase dir
@@ -498,25 +560,61 @@ and \\`a' keep working; only the display shows the selection, and
     ((or :desc 'desc '-r :r) t)
     (_ (user-error "Direction %S: use :asc or :desc" dir))))
 
-(cl-defgeneric qss-sort-by (table col &optional dir)
-  "Return TABLE sorted by column COL; DIR is :asc (default) or :desc.
-Sorting uses the raw value; missing values always come last.")
+(defun qss--sort-keys (keys)
+  "Return KEYS of `sort-by' as a list of (NAME . DESCENDING).
+KEYS are columns, each followed by :asc or :desc if wanted."
+  (let ((result nil))
+    (while keys
+      (let ((k (pop keys)))
+        (when (qss--direction-p k)
+          (user-error "sort-by: %S must follow a column" k))
+        (push (cons (qss--name k)
+                    (and (qss--direction-p (car keys)) (qss--descending-p (pop keys))))
+              result)))
+    (unless result (user-error "sort-by needs a column"))
+    (nreverse result)))
 
-(cl-defmethod qss-sort-by (table col &optional dir)
-  "Sort TABLE by COL in memory; DIR as in the generic function."
+(defun qss--check-sort-names (table names)
+  "Signal an error if one of NAMES is not a column of TABLE, or is ambiguous.
+Only for data rows; objects such as files have more fields than columns."
+  (qss--check-names table names)
+  (when (qss--data-rows-p table)
+    (let ((known (mapcar #'car (qss-table-columns table))))
+      (dolist (n names)
+        (unless (memq n known)
+          (user-error "No column %s; columns: %s" n (mapconcat #'symbol-name known " ")))))))
+
+(defun qss--sort-stage (keys)
+  "Return the title stage of `sort-by' with the parsed KEYS."
+  (format "sort-by %s" (mapconcat (lambda (k) (format "%s%s" (car k) (if (cdr k) " desc" "")))
+                                  keys " ")))
+
+(cl-defgeneric qss-sort-by (table &rest keys)
+  "Return TABLE sorted by KEYS: columns, each followed by :asc (default)
+or :desc if wanted:  (sort-by :age :desc :nr).
+Sorting uses the raw value; missing values always come last.  The sort
+is stable: an earlier order breaks the ties.")
+
+(cl-defmethod qss-sort-by (table &rest keys)
+  "Sort TABLE by KEYS in memory; KEYS as in the generic function."
   (let* ((table (qss-as-table table))
-         (name (qss--name col))
-         (desc (qss--descending-p dir))
+         (parsed (qss--sort-keys keys))
+         (_ (qss--check-sort-names table (mapcar #'car parsed)))
          (rows (sort (copy-sequence (qss-table-rows table))
                      (lambda (r1 r2)
-                       (let ((a (qss-field r1 name)) (b (qss-field r2 name)))
-                         (cond ((null a) nil)
-                               ((null b) t)
-                               (desc (eql 1 (qss--compare a b)))
-                               (t (eql -1 (qss--compare a b)))))))))
-    (qss--derive table (format "sort-by %s%s" name (if desc " desc" ""))
+                       (cl-loop for (name . desc) in parsed
+                                for a = (qss-field r1 name)
+                                for b = (qss-field r2 name)
+                                do (cond ((and (null a) (null b)))
+                                         ((null a) (cl-return nil))
+                                         ((null b) (cl-return t))
+                                         (t (let ((c (qss--compare a b)))
+                                              (unless (eql c 0)
+                                                (cl-return (if desc (eql c 1) (eql c -1)))))))
+                                finally return nil)))))
+    (qss--derive table (qss--sort-stage parsed)
                  rows (qss-table-columns table)
-                 (lambda (tab) (qss-sort-by tab col dir)))))
+                 (lambda (tab) (apply #'qss-sort-by tab keys)))))
 
 (cl-defgeneric qss-first (table &optional n)
   "Return the first N rows of TABLE (default 1).")
@@ -563,8 +661,10 @@ runs here.")
 
 (cl-defmethod qss-collect (table)
   "Return the rows of TABLE as a list; single values unwrapped."
-  (mapcar (lambda (row) (if (qss-value-p row) (qss-value-value row) row))
-          (qss-table-rows (qss-as-table table))))
+  (let ((table (qss-as-table table)))
+    (qss--check-whole table)
+    (mapcar (lambda (row) (if (qss-value-p row) (qss-value-value row) row))
+            (qss-table-rows table))))
 
 (cl-defgeneric qss-get (table col)
   "Return the values of column COL of TABLE as a table with one column.")
@@ -573,6 +673,7 @@ runs here.")
   "Return the values of COL of TABLE, in memory."
   (let* ((table (qss-as-table table))
          (name (qss--name col)))
+    (qss--check-names table (list name))
     (qss--derive table (format "get %s" name)
                  (mapcar (lambda (r) (qss--value name (qss-field r name)))
                          (qss-table-rows table))
@@ -762,29 +863,49 @@ have in common.  LEFT-NAMES and RIGHT-NAMES are the column names."
 
 (defun qss--join-args (options)
   "Return (ON . KIND) from the OPTIONS of `join': :on ... and :kind inner|left."
-  (let ((on nil) (kind 'inner))
+  (let ((on nil) (kind 'inner) (suffix nil) (prefix nil))
     (while options
       (pcase (pop options)
         (:on (setq on (pop options)))
         (:kind (setq kind (pop options))
-               (unless (memq kind '(inner left))
-                 (user-error "join: :kind is inner or left, not %S" kind)))
-        (other (user-error "join: unknown option %S (known: :on :kind)" other))))
-    (cons on kind)))
+               (setq kind (pcase kind
+                            ((or 'inner :inner) 'inner)
+                            ((or 'left :left) 'left)
+                            (_ (user-error "join: :kind is :inner or :left, not %S" kind)))))
+        (:suffix (setq suffix (pop options)))
+        (:prefix (setq prefix (pop options)))
+        (other (user-error "join: unknown option %S (known: :on :kind :suffix :prefix)" other))))
+    (when (and suffix prefix) (user-error "join takes :suffix or :prefix, not both"))
+    (list on kind suffix prefix)))
 
-(defun qss--join-columns (left-names right-names pairs)
-  "Return the right columns kept by a join and their names in the result.
-A list of (RIGHT-NAME . RESULT-NAME): a join column with the same name
-on both sides appears once; a name the left side has too gets -2."
-  (let ((result nil) (taken (copy-sequence left-names)))
+(defun qss--join-columns (left-names right-names pairs &optional suffix prefix)
+  "Return (RIGHT-COLUMNS . AMBIGUOUS) of a join.
+RIGHT-COLUMNS: the right columns kept and their names in the result, a
+list of (RIGHT-NAME . RESULT-NAME).  A join column with the same name on
+both sides appears once.  SUFFIX or PREFIX is added to the names of the
+other right columns (not to the join columns), as in Nushell.  A right
+column whose name the left side has too is left out: AMBIGUOUS lists
+these names; using one of them is an error (`qss--check-names')."
+  (let ((result nil) (ambiguous nil) (taken (copy-sequence left-names))
+        (keys (mapcar #'cdr pairs)))
     (dolist (n right-names)
       (unless (cl-some (lambda (p) (and (eq (cdr p) n) (eq (car p) n))) pairs)
-        (let ((new n) (i 2))
-          (while (memq new taken)
-            (setq new (intern (format "%s-%d" n i)) i (1+ i)))
-          (push new taken)
-          (push (cons n new) result))))
-    (nreverse result)))
+        (let ((new (if (and (or suffix prefix) (not (memq n keys)))
+                       (intern (concat prefix (symbol-name n) suffix))
+                     n)))
+          (if (memq new taken)
+              (push new ambiguous)
+            (push new taken)
+            (push (cons n new) result)))))
+    (cons (nreverse result) (nreverse ambiguous))))
+
+(defun qss--mark-ambiguous (specs names)
+  "Return the column SPECS with those named in NAMES marked :ambiguous."
+  (mapcar (lambda (spec)
+            (if (memq (car spec) names)
+                (cons (car spec) (plist-put (copy-sequence (cdr spec)) :ambiguous t))
+              spec))
+          specs))
 
 (defun qss--join-key (row names)
   "Return the values of NAMES in ROW as a key, or nil if one is missing.
@@ -798,20 +919,26 @@ Whole floats count as integers, so 3 and 3.0 match."
 (cl-defgeneric qss-join (table other &rest options)
   "Join TABLE with OTHER: rows whose join columns are equal, side by side.
 OPTIONS: :on COLUMN, :on (LEFT RIGHT) or :on ((L1 R1) (L2 R2)) (default:
-all columns both have); :kind inner (default, only rows with a partner)
-or left (all rows of TABLE, without a partner the columns of OTHER are
-empty).  Missing values never match, as in SQL.  The rows of the result
-are data (property lists).")
+all columns both have); :kind :inner (default, only rows with a partner)
+or :left (all rows of TABLE, without a partner the columns of OTHER are
+empty); :suffix TEXT or :prefix TEXT renames the columns of OTHER
+except the join columns, as in Nushell.  A name both tables have
+(after renaming) is ambiguous: the column of TABLE stays, and using the
+name, or showing all columns, is an error.  Missing values never match,
+as in SQL.  The rows of the result are data (property lists).")
 
 (cl-defmethod qss-join (table other &rest options)
   "Join TABLE with OTHER in memory."
   (pcase-let* ((table (qss-as-table table))
                (other (qss-as-table other))
-               (`(,on . ,kind) (qss--join-args options))
+               (`(,on ,kind ,suffix ,prefix) (qss--join-args options))
                (left-names (mapcar #'car (qss-table-columns table)))
                (right-names (mapcar #'car (qss-table-columns other)))
                (pairs (qss--join-on on left-names right-names))
-               (right-cols (qss--join-columns left-names right-names pairs))
+               (_ (progn (qss--check-names table (mapcar #'car pairs))
+                         (qss--check-names other (mapcar #'cdr pairs))))
+               (`(,right-cols . ,ambiguous)
+                (qss--join-columns left-names right-names pairs suffix prefix))
                (index (make-hash-table :test #'equal)))
     (dolist (r (qss-table-rows other))
       (let ((k (qss--join-key r (mapcar #'cdr pairs))))
@@ -837,7 +964,7 @@ are data (property lists).")
       (qss--derive table
                    (format "join %s%s" (qss-table-title other) (if (eq kind 'left) " (left)" ""))
                    (nreverse rows)
-                   (append (qss-table-columns table)
+                   (append (qss--mark-ambiguous (qss-table-columns table) ambiguous)
                            (mapcar (lambda (c) (cons (cdr c) (cdr (qss--spec-of other (car c)))))
                                    right-cols))
                    (lambda (tab) (apply #'qss-join tab other options))))))
@@ -932,6 +1059,7 @@ programs.  A query fetches all its rows here.")
   "Return TABLE, in memory, as text in FORMAT."
   (let ((table (qss-as-table table))
         (format (if (stringp format) (intern format) format)))
+    (qss--check-whole table)
     (pcase format
       ((or 'text 'org 'md) (qss--aligned-text table format))
       ('csv (mapconcat (lambda (line) (concat (mapconcat #'qss--csv-field line ",") "\n"))

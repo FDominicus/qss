@@ -54,6 +54,12 @@
                   (abbreviate-file-name file)))
     file))
 
+(defmacro qss-xref--with-db (var &rest body)
+  "Run BODY with VAR an open connection to the database."
+  (declare (indent 1))
+  `(let ((,var (sqlite-open (qss-xref--db))))
+     (unwind-protect (progn ,@body) (sqlite-close ,var))))
+
 (defun qss-xref-table (table)
   "The TABLE of the cross reference database, as a qss query.
 In a pipe it is the source xref: (qss-> (xref \"files\") ...)."
@@ -105,7 +111,8 @@ The column :name is the definition the use stands in (nil: the top level)."
   (interactive (list (qss-xref--read "Uses of")))
   (qss-xref--show
    (qss-> (xref "occurrences") (where (= :value name))
-          (join (xref "definitions") :on (:definition-id :id) :kind left)
+          ;; of the definition only its name (its file-id and line would be ambiguous)
+          (join (qss-> (xref "definitions") (select :id :name)) :on (:definition-id :id) :kind left)
           (join (xref "files") :on (:file-id :id))
           (select :library :name :line :col :context :parent-head :path)
           (sort-by :library))
@@ -292,12 +299,6 @@ Emacs' own Elisp backend answers (see `qss-xref-fallback')."
   (if qss-xref-mode
       (add-hook 'xref-backend-functions #'qss-xref-backend -50 t)
     (remove-hook 'xref-backend-functions #'qss-xref-backend t)))
-
-(defmacro qss-xref--with-db (var &rest body)
-  "Run BODY with VAR an open connection to the database."
-  (declare (indent 1))
-  `(let ((,var (sqlite-open (qss-xref--db))))
-     (unwind-protect (progn ,@body) (sqlite-close ,var))))
 
 (defun qss-xref--fallback (fn identifier)
   "Ask the Elisp backend with FN for IDENTIFIER, if it is there and wanted."

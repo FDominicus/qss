@@ -56,11 +56,23 @@
 
 (ert-deftest qss-join-inner-and-names ()
   (let ((j (qss-> qss-reltest--orders (join qss-reltest--customers :on cust))))
-    ;; status on both sides: the right one becomes status-2
-    (should (equal (mapcar #'car (qss-table-columns j)) '(no cust amount status name status-2)))
+    ;; status on both sides: ambiguous; the left one stays, using it is an error
+    (should (equal (mapcar #'car (qss-table-columns j)) '(no cust amount status name)))
+    (should-error (qss-> j (select no status)) :type 'user-error)
+    (should-error (qss-> j (where (= :status "gold"))) :type 'user-error)
+    (should-error (qss-> j (sort-by status)) :type 'user-error)
+    (should-error (qss-collect j) :type 'user-error)
+    ;; the other columns are plain
+    (should (equal (qss-> j (select no name) collect) '((:no 1 :name "Anna") (:no 2 :name "Bob")
+                                                       (:no 3 :name "Anna"))))
     ;; 2 and 2.0 match; nil never matches; 9 has no partner
     (should (equal (qss-> j (get no) collect) '(1 2 3)))
-    (should (equal (qss-field (car (qss-table-rows j)) 'status-2) "gold"))))
+    ;; :suffix (or :prefix) renames the right columns but the join columns, as in Nushell
+    (let ((s (qss-> qss-reltest--orders (join qss-reltest--customers :on cust :suffix "-c"))))
+      (should (equal (mapcar #'car (qss-table-columns s)) '(no cust amount status name-c status-c)))
+      (should (equal (qss-field (car (qss-table-rows s)) 'status-c) "gold")))
+    (let ((s (qss-> qss-reltest--orders (join qss-reltest--customers :on cust :prefix "c-"))))
+      (should (equal (mapcar #'car (qss-table-columns s)) '(no cust amount status c-name c-status))))))
 
 (ert-deftest qss-join-left ()
   (let ((j (qss-> qss-reltest--orders (join qss-reltest--customers :on cust :kind left))))
@@ -154,11 +166,15 @@
 
 (ert-deftest qss-join-sql-goes-on-as-sql ()
   (qss-reltest--with-db db
-    (let ((q (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust)
-                    (where (= :status-2 "gold")) (select no name))))
+    (let ((q (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust :suffix "-c")
+                    (where (= :status-c "gold")) (select no name-c))))
       (should (qss-relation-p q))
-      (should (string-search "WHERE (\"status-2\" = ?)" (qss-sql q)))
-      (should (equal (qss-collect q) '((:no 1 :name "Anna") (:no 3 :name "Anna")))))))
+      (should (string-search "WHERE (\"status-c\" = ?)" (qss-sql q)))
+      (should (equal (qss-collect q) '((:no 1 :name-c "Anna") (:no 3 :name-c "Anna")))))
+    ;; without :suffix status is ambiguous in SQL as in memory
+    (should-error (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust)
+                         (where (= :status "gold")))
+                  :type 'user-error)))
 
 (ert-deftest qss-join-other-file-in-memory ()
   (qss-reltest--with-db db

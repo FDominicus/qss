@@ -190,13 +190,13 @@ else works.
 |---|---|
 | `(where COND)` | rows for which COND holds; `filter` is the same |
 | `(select COL...)` / `(reject COL...)` | keep / drop columns |
-| `(sort-by COL [:desc])` | sort; missing values last |
+| `(sort-by COL [:desc] ...)` | sort, by several columns if given: `(sort-by age :desc name)`; missing values last |
 | `(first [N])` / `(last [N])` | the first / last N rows (default 1) |
 | `(head [N])` | the first N rows, default 10 (as in clsh) |
 | `(get COL)` | the values of one column |
 | `(group-by COL... AGG...)` | one row per group: the keys, `count` and aggregates such as `(sum amount)`; `RET` shows the group |
 | `(summarize AGG...)` | one row: `count` and the aggregates over all rows |
-| `(join TABLE :on COL)` | rows of both tables whose columns match, side by side |
+| `(join TABLE :on COL)` | rows of both tables whose columns match, side by side; `:kind :left`, `:suffix`, `:prefix` |
 | `(update-rows :COL VALUE ...)` | change the stored rows of an SQLite query (see [Changing rows](#changing-rows)) |
 | `(delete-rows)` | delete the stored rows of an SQLite query |
 | `(each FORM)` | FORM with `it` bound to each row; results are the new rows |
@@ -236,9 +236,14 @@ qss> (sqlite (qss-demo-database) "Orders")
 `join` takes the other table as a source like any other, and options:
 `:on COL` (the same name on both sides), `:on (LEFT RIGHT)` (different
 names), `:on ((L1 R1) (L2 R2))`; without `:on`, all columns both have.
-`:kind left` keeps the rows without a partner. A column both sides have
-appears once if it is joined on, otherwise the right one gets `-2`
-(`status-2`). Missing values never match. The rows of a join are data.
+`:kind :left` keeps the rows without a partner. A column both sides have
+appears once if it is joined on. Any other name both sides have is
+ambiguous: the left column stays, but using the name (or showing all
+columns) is an error. `:suffix "-c"` or `:prefix "c-"` renames the
+columns of the other table (except the join columns), as Nushell's
+`join --suffix` does; or select only what you need first:
+`(join (qss-> (sqlite f "Customers") (select customer-no name)) :on customer-no)`.
+Missing values never match. The rows of a join are data.
 
 `(to text)`, `(to org)` and `(to md)` are aligned and show the cells as
 the table does (`9.8k`, `2026-10-22 14:40`); `(to csv)` and `(to tsv)`
@@ -268,15 +273,29 @@ Columns are keywords; everything else is Lisp, variables included:
 Comparisons mean what they mean in SQL: `=`, `<` … work on numbers,
 strings and times (`(> :modified "2026-10-20")` works), sizes and
 durations can be written as in Nushell (`(> :size "10kb")`,
-`(< :took "1hr")`), `like` ignores
-case, and a missing value is NULL — comparing with it is unknown, so the
-same condition returns the same rows in memory and in SQLite.
+`(< :took "1hr")`), `like` ignores the case of ASCII letters (as SQLite:
+`"b%"` finds `Bert`, `"ä%"` does not find `Ärger`), and a missing value is
+NULL — comparing with it is unknown, so the same condition returns the
+same rows in memory and in SQLite. `nil` as a value is an error; ask
+for NULL with `is-null`.
 
 If `it` occurs, the condition is ordinary Lisp with `it` bound to the row:
 
 ```elisp
 (where (string-prefix-p "." (qss-field it 'name)))
 ```
+
+### One vocabulary with Common Lisp
+
+The same words exist in Common Lisp, in `qss-query` (SBCL), and both
+follow Nushell. Two files of S-expressions decide what a word means:
+`spec/vocabulary.sexp` lists every word with its arguments, its
+meaning, the Nushell command and the function on each side;
+`spec/cases.sexp` shows each word on two small tables, with the
+expected result. Both implementations run every case in memory and on
+SQLite (`qss-spec-test.el` here), so the four runs must agree. Where
+Nushell does a thing differently, the case says so. To change what a
+word means, change the case first.
 
 ### SQLite
 

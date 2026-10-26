@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.13.3.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.14.0.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -22,7 +22,7 @@
 \code{nu} & \code{qss-nu-pipe} & Send TABLE through the Nushell COMMAND and return the result. \\
 \code{reject} & \code{qss-reject} & Return TABLE with all columns except COLS (cut down as in \code{qss-select}). \\
 \code{select} & \code{qss-select} & Return TABLE with only the columns COLS. \\
-\code{sort-by} & \code{qss-sort-by} & Return TABLE sorted by column COL; DIR is :asc (default) or :desc. \\
+\code{sort-by} & \code{qss-sort-by} & Return TABLE sorted by KEYS: columns, each followed by :asc (default) \\
 \code{sql} & \code{qss-sql} & Return the query REL as text with its parameters. \\
 \code{summarize} & \code{qss-summarize} & Return one row with the count of TABLE and the aggregates AGGS. \\
 \code{to} & \code{qss-to} & Return TABLE as text in FORMAT, one of \code{qss-text-formats}. \\
@@ -189,7 +189,7 @@ The 51 functions of the interface with their contracts, as \file{qss-interface.e
 \code{qss-run} & \code{(-\textgreater{} stringp (rest stringp) qss-table-p)} \\
 \code{qss-select}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest qss-column-name) qss-result)} \\
 \code{qss-show} & \code{(-\textgreater{} qss-table-p (opt any) bufferp)} \\
-\code{qss-sort-by}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular qss-column-name (opt symbolp) qss-result)} \\
+\code{qss-sort-by}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest qss-column-name) qss-result)} \\
 \code{qss-sql} & \code{(-\textgreater{} any stringp)} \\
 \code{qss-sql-name-key} & \code{(-\textgreater{} stringp symbolp)} \\
 \code{qss-sql-rowid} & \code{(-\textgreater{} any (or/c null integerp))} \\

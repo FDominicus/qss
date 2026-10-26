@@ -110,7 +110,7 @@
 (qss-define-contract qss-where (-> qss-tabular (or/c qss-condition-p functionp) qss-result))
 (qss-define-contract qss-select (-> qss-tabular (rest qss-column-name) qss-result))
 (qss-define-contract qss-reject (-> qss-tabular (rest qss-column-name) qss-result))
-(qss-define-contract qss-sort-by (-> qss-tabular qss-column-name (opt symbolp) qss-result))
+(qss-define-contract qss-sort-by (-> qss-tabular (rest qss-column-name) qss-result))
 (qss-define-contract qss-first (-> qss-tabular (opt natnump) qss-result))
 (qss-define-contract qss-last (-> qss-tabular (opt natnump) qss-result))
 (qss-define-contract qss-get (-> qss-tabular qss-column-name qss-result))

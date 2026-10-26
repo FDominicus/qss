@@ -189,12 +189,12 @@ The sources are \code{files}, \code{processes}, \code{run}, \code{sqlite},
 \toprule
 \code{(where \emph{cond})} & rows for which the condition holds (\code{filter} is the same) \\
 \code{(select \emph{col}\ldots)}, \code{(reject \emph{col}\ldots)} & keep, drop columns \\
-\code{(sort-by \emph{col} [:desc])} & sort; missing values last \\
+\code{(sort-by \emph{col} [:desc]\ldots)} & sort, by several columns if given; missing values last \\
 \code{(first [\emph{n}])}, \code{(last [\emph{n}])} & the first, last rows \\
 \code{(get \emph{col})} & the values of one column \\
 \code{(group-by \emph{col}\ldots{} \emph{agg}\ldots)} & one row per group: keys, count, aggregates; \kbd{RET} shows the group \\
 \code{(summarize \emph{agg}\ldots)} & one row: count and aggregates over all rows \\
-\code{(join \emph{table} :on \emph{col})} & rows of both tables whose columns match \\
+\code{(join \emph{table} :on \emph{col})} & rows of both tables whose columns match; \code{:kind :left}, \code{:suffix}, \code{:prefix} \\
 \code{(update-rows :\emph{col} \emph{v}\ldots)}, \code{(delete-rows)} & change, delete stored rows (section~\ref{sec:changing}) \\
 \code{(each \emph{form})} & \emph{form} with \code{it} bound to each row; the results are the new rows \\
 \code{(nu \emph{command})} & the table through Nushell (section~\ref{sec:nushell}) \\
@@ -255,10 +255,15 @@ qss> (sqlite (qss-demo-database) "Orders")
 The other table is written as a source, like the start of a pipe. \code{:on}
 names the column (the same on both sides), a pair \code{(\emph{left}
 \emph{right})} for different names, or a list of pairs; without \code{:on},
-all columns both tables have. \code{:kind left} keeps the rows of the left
+all columns both tables have. \code{:kind :left} keeps the rows of the left
 table without a partner. A column both sides have appears once if it is joined
-on; otherwise the right one gets the suffix \code{-2}. Missing values never
-match, as in SQL. The rows of a join are data (property lists). The options are
+on. Any other name both sides have is \emph{ambiguous}: the column of the left
+table stays, but using the name, or showing all columns, is an error.
+\code{:suffix "-c"} or \code{:prefix "c-"} renames the columns of the other
+table except the join columns, as \code{join --suffix} in Nushell; or select
+only what is needed before:
+\code{(join (qss-> (xref "files") (select :id :path)) :on (:file-id :id))}.
+Missing values never match, as in SQL. The rows of a join are data (property lists). The options are
 data like column names: in a pipe they are not evaluated.
 
 \section{Conditions}
@@ -275,7 +280,10 @@ Columns are keywords; everything else is Lisp, variables included:
 The comparisons mean what they mean in SQL. \code{=}, \code{<} \ldots{} work on
 numbers, strings and times (\code{(> :modified "2026-10-20")} works); sizes and
 durations can be written as in Nushell (\code{(> :size "10kb")},
-\code{(< :took "1hr")}); \code{like} ignores case; and a missing value is NULL:
+\code{(< :took "1hr")}); \code{like} ignores the case of ASCII letters, as
+SQLite does (\code{"b\%"} finds \code{Bert}, \code{"ä\%"} does not find
+\code{Ärger}); \code{nil} as a value is an error (ask with \code{is-null}); and
+a missing value is NULL:
 comparing with it is \emph{unknown}, neither true nor false, and \code{where}
 keeps only what is true. So \code{(not (= :city "Bruchsal"))} does not keep
 rows without a city --- in memory exactly as in SQLite.
@@ -286,6 +294,25 @@ bound to the row object:
 \begin{lstlisting}
 (where (string-prefix-p "." (qss-field it 'name)))
 \end{lstlisting}
+
+\section{One vocabulary with Common Lisp}
+
+The same words exist in Common Lisp, in \code{qss-query} for SBCL, and both
+follow Nushell. Two files of S-expressions decide what a word means:
+\file{spec/vocabulary.sexp} lists every word with its arguments, its meaning,
+the Nushell command and the function on each side; \file{spec/cases.sexp}
+shows each word on two small tables with the expected result:
+
+\begin{lstlisting}
+(:case "sort-by :desc, NULL last" :from :people
+ :stages ((sort-by :age :desc :nr) (get :nr))
+ :values (2 4 1 3 5))
+\end{lstlisting}
+
+Both implementations run every case in memory and on SQLite
+(\file{qss-spec-test.el} here), so the four runs must agree. Where Nushell does
+a thing differently, the case says so. To change what a word means, change
+the case first.
 
 % ======================================================================
 \chapter{The REPL}

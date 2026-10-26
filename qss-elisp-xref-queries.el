@@ -116,8 +116,10 @@
 ;;; Files that could not be read or compiled
 
 (qss-display-> (xref "files") (where (not-null :error)) (select :path :error))
+;; both tables have :error; of files only the path is wanted
 (qss-display-> (xref "compiled") (where (not-null :error))
-               (join (xref "files") :on (:file-id :id)) (select :path :error))
+               (join (qss-> (xref "files") (select :id :path)) :on (:file-id :id))
+               (select :path :error))
 
 (provide 'qss-elisp-xref-queries)
 ;;; qss-elisp-xref-queries.el ends here

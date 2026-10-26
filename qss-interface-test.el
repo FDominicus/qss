@@ -73,7 +73,7 @@ The methods stay defined: they only apply to the test type."
   (save-window-excursion
     (describe-function 'qss-sort-by)
     (with-current-buffer (help-buffer)
-      (should (string-search "Contract: (-> qss-tabular qss-column-name (opt symbolp) qss-result)"
+      (should (string-search "Contract: (-> qss-tabular (rest qss-column-name) qss-result)"
                              (buffer-string))))))
 
 (ert-deftest qss-interface-repl-shows-violation ()

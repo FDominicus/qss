@@ -75,9 +75,8 @@ the mapping of names to keys."
     (should (equal (qss-relation-table (qss-sqlite qss-stest--file "ht_kunden")) "HT_Kunden"))
     (should-error (qss-sqlite qss-stest--file "NoSuchTable") :type 'user-error)
     (let ((cols (qss-as-table (qss-columns-of (qss-stest--k)))))
-      (should (equal (mapcar (lambda (r) (qss-field r 'column)) (qss-table-rows cols))
-                     '(kunde-nr name1 ort umsatz strasse datum betrag plz)))
-      (should (equal (qss-field (nth 4 (qss-table-rows cols)) 'name) "Straße")))))
+      ;; the names, as in memory (and in Nushell)
+      (should (equal (qss-collect cols) '(kunde-nr name1 ort umsatz strasse datum betrag plz))))))
 
 (ert-deftest qss-sql-name-collision ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))

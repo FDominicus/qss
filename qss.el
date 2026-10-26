@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.13.3
+;; Version: 0.14.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -87,6 +87,9 @@
 
 ;;; Tests
 
+(declare-function ert-select-tests "ert" (selector universe))
+(declare-function ert-test-name "ert" (test))
+
 (defun qss--load-tests ()
   "Load the test files of qss from the directory of the package."
   (require 'ert)
@@ -109,9 +112,17 @@ restored afterwards."
 ;;;###autoload
 (defun qss-run-tests-batch ()
   "Run the qss test suite in batch mode and exit with its result.
-Meant for the command line with -f; the README shows the call."
+Meant for the command line with -f; the README shows the call.
+Each test is named when it starts, not only when it is done (as ERT
+does), so a test that hangs is the last line on the screen."
   (qss--load-tests)
-  (ert-run-tests-batch-and-exit "^qss-"))
+  (let* ((total (length (ert-select-tests "^qss-" t)))
+         (n 0)
+         (announce (lambda (test)
+                     (setq n (1+ n))
+                     (message "   start  %d/%d  %s" n total (ert-test-name test)))))
+    (advice-add 'ert-run-test :before announce '((name . qss-announce)))
+    (ert-run-tests-batch-and-exit "^qss-")))
 
 (provide 'qss)
 ;;; qss.el ends here
