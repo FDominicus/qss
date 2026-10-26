@@ -290,24 +290,55 @@ ARGS is the arglist, or :none for a definition without one."
                                doc pos parent))
     n))
 
+;; Lists the reader returns need not end: '#1=(1 . #1#) is a list whose
+;; cdr is itself (seq-tests.el has such).  So no loop here goes along a
+;; list with `while consp': a list that is not proper goes through
+;; `qss-elisp-xref--elements' (not `safe-length': for a circular list
+;; that gives only "at least" the number of elements, so some twice).
+;; A list reached again through a car (#1=(a #1#)) or a vector holding
+;; itself is caught by `qss-elisp-xref--seen'.
+
+(defvar qss-elisp-xref--seen nil
+  "The conses and vectors walked in the current top-level form (eq table).
+nil outside of `qss-elisp-xref--index-buffer': nothing is checked.")
+
+(defun qss-elisp-xref--elements (list)
+  "The elements of LIST: proper, dotted (the last cdr counts) or circular.
+A circular list gives each element once."
+  (if (proper-list-p list)
+      list
+    (let ((l list) (conses (make-hash-table :test #'eq)) (elements nil))
+      (while (and (consp l) (not (gethash l conses)))
+        (puthash l t conses)
+        (push (car l) elements)
+        (setq l (cdr l)))
+      (when (and l (not (consp l)))       ; dotted; circular ends on a cons
+        (push l elements))
+      (nreverse elements))))
+
 (defun qss-elisp-xref--walk-args (list context parent arg def)
   "Collect the symbols of the argument LIST as CONTEXT."
-  (dolist (a (if (proper-list-p list) list (flatten-tree list)))
+  (dolist (a (qss-elisp-xref--elements list))
     (cond ((qss-elisp-xref--symbolp a)
            (qss-elisp-xref--occurrence a (if (memq (qss-elisp-xref--bare a) '(&optional &rest &key &aux &body))
                                              'other context)
                                        parent arg def))
           ((consp a)                      ; (x default) or ((x y) specializer)
-           (qss-elisp-xref--occurrence (car (flatten-tree (car a))) context parent arg def)
-           (dolist (rest (cdr a)) (qss-elisp-xref--walk rest parent arg def nil))))))
+           (let ((name (car a)) (depth 0))
+             ;; ((x y) ...): x; bounded, a car may lead back to itself
+             (while (and (consp name) (< depth 100))
+               (setq name (car name) depth (1+ depth)))
+             (qss-elisp-xref--occurrence name context parent arg def))
+           (dolist (rest (qss-elisp-xref--elements (cdr a)))
+             (qss-elisp-xref--walk rest parent arg def nil))))))
 
 (defun qss-elisp-xref--walk-list (list parent def quoted &optional from)
-  "Walk the elements of LIST as arguments of PARENT, counting from FROM (1)."
-  (let ((i (or from 1)) (l list))
-    (while (consp l)
-      (qss-elisp-xref--walk (car l) parent i def quoted)
-      (setq l (cdr l) i (1+ i)))
-    (when l (qss-elisp-xref--walk l parent i def quoted))))
+  "Walk the elements of LIST as arguments of PARENT, counting from FROM (1).
+LIST may be dotted (the last cdr is walked too) or circular."
+  (let ((i (or from 1)))
+    (dolist (e (qss-elisp-xref--elements list))
+      (qss-elisp-xref--walk e parent i def quoted)
+      (setq i (1+ i)))))
 
 (defun qss-elisp-xref--walk-definition (form head spec parent-def)
   "Collect the definition FORM with HEAD, of SPEC (KIND NAME ARGS DOC)."
@@ -361,15 +392,18 @@ QUOTED non-nil: inside ' or ` (data, except below , and ,@)."
    ((symbol-with-pos-p x)
     (qss-elisp-xref--occurrence x (if quoted 'quoted 'other) parent arg def))
    ((stringp x) (qss-elisp-xref--string x parent arg def))
+   ;; met before in this form: a list or vector that contains itself
+   ((and qss-elisp-xref--seen (or (consp x) (vectorp x))
+         (prog1 (gethash x qss-elisp-xref--seen)
+           (puthash x t qss-elisp-xref--seen))))
    ((vectorp x)
     (dotimes (i (length x)) (qss-elisp-xref--walk (aref x i) parent arg def t)))
    ((not (consp x)))
-   ;; a dotted list such as (quote . edebug-read-quote) is data
+   ;; a dotted list such as (quote . edebug-read-quote), or a circular
+   ;; one such as '#1=(1 . #1#), is data
    ((not (proper-list-p x))
-    (while (consp x)
-      (qss-elisp-xref--walk (car x) parent arg def t)
-      (setq x (cdr x)))
-    (qss-elisp-xref--walk x parent arg def t))
+    (dolist (e (qss-elisp-xref--elements x))
+      (qss-elisp-xref--walk e parent arg def t)))
    (t
     (let* ((head-x (car x))
            (head (and (qss-elisp-xref--symbolp head-x) (qss-elisp-xref--bare head-x)))
@@ -540,7 +574,8 @@ Return the number of forms."
                          (invalid-read-syntax (forward-line 1) 'qss-elisp-xref--unreadable)))
                  (end (point)))
             (unless (eq form 'qss-elisp-xref--unreadable)
-              (let ((qss-elisp-xref--state nil))
+              (let ((qss-elisp-xref--state nil)
+                    (qss-elisp-xref--seen (make-hash-table :test #'eq)))
                 ;; definitions of this form are numbered after those before:
                 ;; N-DEFS placeholders make `qss-elisp-xref--new-definition'
                 ;; count on from there
