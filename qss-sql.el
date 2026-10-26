@@ -27,7 +27,7 @@
 ;;   become SQL:            where (condition as data), sort-by, first,
 ;;                          count, select, reject (SELECT with columns), columns
 ;;   fetch the rows, then   where with `it' or with functions over
-;;   continue in memory:    columns, last, get, each, group-by
+;;   continue in memory:    columns, last, get, each, group-sum
 ;;
 ;; Values in conditions become `?' parameters, never text in the SQL.
 ;; The word `sql' shows the query of the pipe.
@@ -229,7 +229,7 @@ WHERES: list of (SQL . PARAMS).  ORDER: list of (KEY DESCENDING SQL),
 most important first; SQL is the quoted column name.  LIMIT: a number or nil.  PROJECTED: t after
 select/reject; then the query names its columns.  TITLE: the pipe so far.
 SOURCE: (SQL . PARAMS) of a query this one reads from instead of TABLE
-\(after join and group-by); its columns are named by their keys.
+\(after join and group-sum); its columns are named by their keys.
 ROW-FN: a function that turns each fetched row into the row object
 \(groups), or nil."
   file table columns inner wheres order limit projected title source row-fn)
@@ -280,16 +280,7 @@ The slots to set are in CHANGES, a property list of slot keywords and values."
       (user-error "%s has no column %s; columns: %s"
                   (qss-relation-table rel) key
                   (mapconcat (lambda (c) (symbol-name (car c))) (qss-relation-columns rel) " ")))
-    (when (qss-sql--ambiguous-p col)
-      (qss--ambiguous-error (list key)))
     (qss-sql-quote (nth 1 col))))
-
-;; A column of a join whose name both tables have is ambiguous (see
-;; `qss--check-names'): the fifth element of its entry is t.
-
-(defun qss-sql--ambiguous-p (col)
-  "Return non-nil if the column entry COL is ambiguous (after a join)."
-  (nth 4 col))
 
 
 
@@ -362,8 +353,6 @@ numbers where `qss-sql--quantities-p' says so."
             ((keywordp f) (qss-sql--column rel (qss--name f)))
             ((eq (car-safe f) 'qss-param)
              (let ((v (value-of f)))
-               (when (null v)
-                 (user-error "nil as a value in %S: use (is-null :column) for NULL" template))
                (qss-sql--param v params)))
             (t
              (pcase (car f)
@@ -381,12 +370,19 @@ numbers where `qss-sql--quantities-p' says so."
                           (list (if (eq (car-safe (nth 2 f)) 'qss-param)
                                     (value-of (nth 2 f))
                                   (user-error "Expected a list for `in', not %S" (nth 2 f)))))
-                      (if (null list)
-                          "0"
-                        (format "(%s IN (%s))" left
-                                (mapconcat (lambda (v) (qss-sql--param v params)) list ", ")))))
+                      ;; NULL is in the list only if the list has nil, as in Nushell
+                      (let* ((null-in (memq nil list))
+                             (vals (remq nil list))
+                             (in (and vals (format "%s IN (%s)" left
+                                                   (mapconcat (lambda (v) (qss-sql--param v params))
+                                                              vals ", ")))))
+                        (cond ((and null-in in) (format "(%s IS NULL OR %s)" left in))
+                              (null-in (format "(%s IS NULL)" left))
+                              (in (format "(%s IS NOT NULL AND %s)" left in))
+                              (t "0")))))
+               ;; = and /= treat NULL as a value, as Nushell: IS and IS NOT
                (_ (let ((op (pcase (car f)
-                              ('= "=") ('/= "<>") ('< "<") ('> ">") ('<= "<=") ('>= ">="))))
+                              ('= "IS") ('/= "IS NOT") ('< "<") ('> ">") ('<= "<=") ('>= ">="))))
                     (unless op (error "Unknown operator in qss-sql: %S" (car f)))
                     (format "(%s %s %s)" (render (nth 1 f)) op (render (nth 2 f))))))))))
       (let ((sql (render template)))
@@ -416,11 +412,14 @@ SELECT, if given, replaces the list of columns (e.g. \"rowid\")."
                   (when wheres
                     (concat "\nWHERE " (mapconcat #'car wheres "\n  AND ")))
                   (when order
-                    ;; NULL always last, as in memory
+                    ;; NULL last ascending, first descending (reversed), as in memory
                     (concat "\nORDER BY "
                             (mapconcat (lambda (o)
                                          (let ((c (nth 2 o)))
-                                           (format "%s IS NULL, %s%s" c c (if (nth 1 o) " DESC" ""))))
+                                           (cond ((eq (car o) 'qss--rowid)
+                                                  (if (nth 1 o) "rowid DESC" "rowid"))
+                                                 ((nth 1 o) (format "%s IS NULL DESC, %s DESC" c c))
+                                                 (t (format "%s IS NULL, %s" c c)))))
                                        order ", ")))
                   (when limit "\nLIMIT ?"))
           (append (cdr inner)
@@ -489,16 +488,13 @@ numbers.  Times are stored as text and stay text."
                    (qss-type (nth 3 col))
                    (kw (intern (format ":%s" key))))
               (ignore kw)
-              (append
-               (cond ((memq qss-type '(size duration number)) (list key :type qss-type))
-                     ((and rows
-                           (cl-some (lambda (r) (qss-field r key)) rows)
-                           (cl-every (lambda (r) (let ((v (qss-field r key))) (or (null v) (numberp v))))
-                                     rows))
-                      (list key :type 'number))
-                     (t (list key)))
-               ;; the words after it run in memory and check it there
-               (and (qss-sql--ambiguous-p col) (list :ambiguous t)))))
+              (cond ((memq qss-type '(size duration number)) (list key :type qss-type))
+                    ((and rows
+                          (cl-some (lambda (r) (qss-field r key)) rows)
+                          (cl-every (lambda (r) (let ((v (qss-field r key))) (or (null v) (numberp v))))
+                                    rows))
+                     (list key :type 'number))
+                    (t key))))
           (qss-relation-columns rel)))
 
 (defun qss-sql--table (rel rows title)
@@ -531,7 +527,6 @@ numbers.  Times are stored as text and stay text."
     (setf (qss-table-source table)
           (lambda () (qss-sql--table rel (qss-sql--run rel qss-sql-display-limit)
                                      (qss-table-title table))))
-    (qss--check-whole table)
     (qss-show table rel)))
 
 (cl-defmethod qss-where ((rel qss-relation) cond)
@@ -545,21 +540,38 @@ numbers.  Times are stored as text and stay text."
     (cl-call-next-method)))
 
 (cl-defmethod qss-sort-by ((rel qss-relation) &rest keys)
-  "Sort the query REL by KEYS in SQL; KEYS as in the generic function."
+  "Sort the query REL by KEYS in SQL; KEYS as in the generic function.
+Each :desc reverses the whole order so far, as in memory: the columns
+after it and the earlier order run the other way, and on a table the
+rowid breaks the last ties."
   (let* ((parsed (qss--sort-keys keys))
-         (base (if (qss-relation-limit rel) (qss-sql--wrap rel) rel)))
-    ;; The columns are looked up now, not when the SQL is built: a later
-    ;; select may drop them, and ORDER BY may still name them.
+         (base (if (qss-relation-limit rel) (qss-sql--wrap rel) rel))
+         (flip nil)
+         ;; the columns are looked up now: a later select may drop them,
+         ;; and ORDER BY may still name them
+         (new (mapcar (lambda (k)
+                        (setq flip (not (eq flip (cdr k))))
+                        (list (car k) flip (qss-sql--column base (car k))))
+                      parsed))
+         (old (cl-remove-if (lambda (o) (assq (car o) parsed)) (qss-relation-order base)))
+         (old (if (or (assq 'qss--rowid old) (not (qss-sql--direct-p base))
+                      (not (qss-sql--with-db db (qss-relation-file base)
+                             (qss-sql--real-table-p db base))))
+                  old
+                (append old (list (list 'qss--rowid nil "rowid"))))))
     (qss-sql--copy base (qss--sort-stage parsed)
-                   ;; the new order first, the old one breaks ties
-                   :order (append (mapcar (lambda (k) (list (car k) (cdr k) (qss-sql--column base (car k))))
-                                          parsed)
-                                  (cl-remove-if (lambda (o) (assq (car o) parsed))
-                                                (qss-relation-order base))))))
+                   :order (cl-remove-if
+                           ;; rowid ascending is the order anyway
+                           (lambda (o) (and (eq (car o) 'qss--rowid) (not (nth 1 o))))
+                           (append new
+                                   (mapcar (lambda (o) (list (car o) (if flip (not (nth 1 o)) (nth 1 o))
+                                                             (nth 2 o)))
+                                           old))))))
 
 (cl-defmethod qss-first ((rel qss-relation) &optional n)
-  "Limit the query REL to N rows in SQL."
-  (let ((n (or n 1)))
+  "Limit the query REL to N rows in SQL; without N fetch the first row itself."
+  (if (null n)
+      (qss--row-itself (car (qss-sql--run (qss-first rel 1))))
     (qss-sql--copy rel (format "first %d" n)
                    :limit (if (qss-relation-limit rel) (min n (qss-relation-limit rel)) n))))
 
@@ -587,8 +599,7 @@ numbers.  Times are stored as text and stay text."
 (cl-defmethod qss-reject ((rel qss-relation) &rest cols)
   "Select all columns of REL except COLS, in SQL."
   (let ((keys (mapcar #'qss--name cols)))
-    (dolist (k keys)                    ; do they exist? (an ambiguous one may go)
-      (unless (assq k (qss-relation-columns rel)) (qss-sql--column rel k)))
+    (dolist (k keys) (qss-sql--column rel k))   ; do they exist?
     (qss-sql--project rel
                       (cl-remove-if (lambda (k) (memq k keys))
                                     (mapcar #'car (qss-relation-columns rel)))
@@ -603,7 +614,7 @@ The same as in memory: one row per column, a single value."
                   '(column)))
 
 ;;; ------------------------------------------------------------------
-;;; Join and group-by as SQL
+;;; Join and group-sum as SQL
 
 (defun qss-sql--from-query (rel stage columns select tail &optional extra-params)
   "Return a query over REL: SELECT SELECT FROM (REL) AS t TAIL.
@@ -628,20 +639,14 @@ Otherwise in memory."
                  (left-names (mapcar #'car (qss-relation-columns rel)))
                  (right-names (mapcar #'car (qss-relation-columns other)))
                  (pairs (qss--join-on on left-names right-names))
-                 (_ (progn (dolist (p pairs)
-                             (qss-sql--column rel (car p))
-                             (qss-sql--column other (cdr p)))))
-                 (`(,right-cols . ,ambiguous)
-                  (qss--join-columns left-names right-names pairs suffix prefix))
+                 (right-cols (qss--join-columns left-names right-names pairs suffix prefix))
                  (lq (qss-sql-query rel))
                  (rq (qss-sql-query other))
                  (lcol (lambda (k) (qss-sql-quote (nth 1 (assq k (qss-relation-columns rel))))))
                  (rcol (lambda (k) (qss-sql-quote (nth 1 (assq k (qss-relation-columns other)))))))
       (qss-relation--make
        :file (qss-relation-file rel) :table (qss-relation-table rel) :projected t
-       :columns (append (mapcar (lambda (c) (list (car c) (symbol-name (car c)) (nth 2 c) (nth 3 c)
-                                                  (or (qss-sql--ambiguous-p c)
-                                                      (and (memq (car c) ambiguous) t))))
+       :columns (append (mapcar (lambda (c) (list (car c) (symbol-name (car c)) (nth 2 c) (nth 3 c)))
                                 (qss-relation-columns rel))
                         (mapcar (lambda (c)
                                   (let ((col (assq (car c) (qss-relation-columns other))))
@@ -662,7 +667,8 @@ Otherwise in memory."
                              (replace-regexp-in-string "^" "  " (car lq))
                              (if (eq kind 'left) "LEFT JOIN" "JOIN")
                              (replace-regexp-in-string "^" "  " (car rq))
-                             (mapconcat (lambda (p) (format "l.%s = r.%s" (funcall lcol (car p))
+                             ;; NULL matches NULL, as in Nushell
+                             (mapconcat (lambda (p) (format "l.%s IS r.%s" (funcall lcol (car p))
                                                             (funcall rcol (cdr p))))
                                         pairs " AND "))
                      (append (cdr lq) (cdr rq)))))))
@@ -726,16 +732,16 @@ The rows are groups (`qss-group') whose rows a query of their own fetches."
           (mapcar (lambda (k) (list k nil (qss-sql-quote (symbol-name k)))) keys))
     grouped))
 
-(cl-defmethod qss-group-by ((rel qss-relation) &rest args)
+(cl-defmethod qss-group-sum ((rel qss-relation) &rest args)
   "Group the query REL by ARGS in SQL (GROUP BY)."
   (pcase-let ((`(,keys . ,aggs) (qss--group-args args)))
-    (unless keys (user-error "group-by needs a column; for all rows use summarize"))
-    (qss-sql--group rel keys aggs (qss--group-stage "group-by" args))))
+    (unless keys (user-error "group-sum needs a column; for all rows use summarize"))
+    (qss-sql--group rel keys aggs (qss--group-stage "group-sum" args))))
 
 (cl-defmethod qss-summarize ((rel qss-relation) &rest aggs)
   "Summarize the query REL by AGGS in SQL."
   (pcase-let ((`(,keys . ,aggs*) (qss--group-args aggs)))
-    (when keys (user-error "summarize takes only aggregates such as (sum amount); for groups use group-by"))
+    (when keys (user-error "summarize takes only aggregates such as (sum amount); for groups use group-sum"))
     (qss-sql--group rel nil aggs* (qss--group-stage "summarize" aggs))))
 
 (defun qss-sql (rel)

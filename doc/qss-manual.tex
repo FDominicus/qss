@@ -189,10 +189,11 @@ The sources are \code{files}, \code{processes}, \code{run}, \code{sqlite},
 \toprule
 \code{(where \emph{cond})} & rows for which the condition holds (\code{filter} is the same) \\
 \code{(select \emph{col}\ldots)}, \code{(reject \emph{col}\ldots)} & keep, drop columns \\
-\code{(sort-by \emph{col} [:desc]\ldots)} & sort, by several columns if given; missing values last \\
-\code{(first [\emph{n}])}, \code{(last [\emph{n}])} & the first, last rows \\
+\code{(sort-by \emph{col} [:desc]\ldots)} & sort, stable, by several columns if given; missing values last, \code{:desc} reverses the whole order \\
+\code{(first [\emph{n}])}, \code{(last [\emph{n}])} & the first, last \emph{n} rows; without \emph{n} the row itself \\
 \code{(get \emph{col})} & the values of one column \\
-\code{(group-by \emph{col}\ldots{} \emph{agg}\ldots)} & one row per group: keys, count, aggregates; \kbd{RET} shows the group \\
+\code{(group-by \emph{col}\ldots)} & one row per group: keys and \code{items}, the rows of the group \\
+\code{(group-sum \emph{col}\ldots{} \emph{agg}\ldots)} & one row per group: keys, count, aggregates; \kbd{RET} shows the group \\
 \code{(summarize \emph{agg}\ldots)} & one row: count and aggregates over all rows \\
 \code{(join \emph{table} :on \emph{col})} & rows of both tables whose columns match; \code{:kind :left}, \code{:suffix}, \code{:prefix} \\
 \code{(update-rows :\emph{col} \emph{v}\ldots)}, \code{(delete-rows)} & change, delete stored rows (section~\ref{sec:changing}) \\
@@ -226,14 +227,14 @@ the pipe, shown as a table; it returns the buffer.
 \section{Groups and joins}
 
 \begin{Verbatim}
-qss> (sqlite (qss-demo-database) "Orders") (group-by status (sum amount) (max order-date))
+qss> (sqlite (qss-demo-database) "Orders") (group-sum status (sum amount) (max order-date))
 status     count  sum-amount  max-order-date
 cancelled      1       150.0  2026-10-12
 paid           3       245.5  2026-10-02
                2     1299.99  2026-10-05
 \end{Verbatim}
 
-\code{group-by} takes the columns to group by and any number of aggregates:
+\code{group-sum} takes the columns to group by and any number of aggregates:
 \code{(sum \emph{col})}, \code{(avg \emph{col})}, \code{(min \emph{col})},
 \code{(max \emph{col})} and \code{(count \emph{col})}, the number of values
 present. They are named \code{sum-amount} and so on, or as told:
@@ -244,12 +245,17 @@ or average of sizes is a size again. \kbd{RET} on a group shows its rows.
 \code{summarize} is the same without groups: one row over all rows (also over
 none: then the count is 0).
 
+\code{group-by} is the word of Nushell (\code{group-by --to-table}): one row per
+group with the keys and \code{items}, the rows of the group, in the order in
+which the keys first appear; a missing key is a group too. It keeps the rows,
+\code{group-sum} counts and sums them.
+
 \code{join} puts the rows of two tables side by side where their columns match:
 
 \begin{Verbatim}
 qss> (sqlite (qss-demo-database) "Orders")
        (join (sqlite (qss-demo-database) "Customers") :on customer-no)
-       (group-by city (sum amount)) (sort-by sum-amount :desc)
+       (group-sum city (sum amount)) (sort-by sum-amount :desc)
 \end{Verbatim}
 
 The other table is written as a source, like the start of a pipe. \code{:on}
@@ -257,13 +263,14 @@ names the column (the same on both sides), a pair \code{(\emph{left}
 \emph{right})} for different names, or a list of pairs; without \code{:on},
 all columns both tables have. \code{:kind :left} keeps the rows of the left
 table without a partner. A column both sides have appears once if it is joined
-on. Any other name both sides have is \emph{ambiguous}: the column of the left
-table stays, but using the name, or showing all columns, is an error.
-\code{:suffix "-c"} or \code{:prefix "c-"} renames the columns of the other
-table except the join columns, as \code{join --suffix} in Nushell; or select
-only what is needed before:
+on. Any other name both sides have gets \code{\_} on the right side
+(\code{name\_}, or \code{name\_\_} if that is taken too), as in Nushell.
+\code{:suffix "-c"} or \code{:prefix "c-"} renames every column of the other
+table except a join column both have --- so the right key of
+\code{:on (\emph{left} \emph{right})} is renamed too ---, as \code{join
+--suffix} in Nushell; or select only what is needed before:
 \code{(join (qss-> (xref "files") (select :id :path)) :on (:file-id :id))}.
-Missing values never match, as in SQL. The rows of a join are data (property lists). The options are
+As in Nushell, a missing value matches a missing value. The rows of a join are data (property lists). The options are
 data like column names: in a pipe they are not evaluated.
 
 \section{Conditions}
@@ -282,11 +289,14 @@ numbers, strings and times (\code{(> :modified "2026-10-20")} works); sizes and
 durations can be written as in Nushell (\code{(> :size "10kb")},
 \code{(< :took "1hr")}); \code{like} ignores the case of ASCII letters, as
 SQLite does (\code{"b\%"} finds \code{Bert}, \code{"ä\%"} does not find
-\code{Ärger}); \code{nil} as a value is an error (ask with \code{is-null}); and
-a missing value is NULL:
-comparing with it is \emph{unknown}, neither true nor false, and \code{where}
-keeps only what is true. So \code{(not (= :city "Bruchsal"))} does not keep
-rows without a city --- in memory exactly as in SQLite.
+\code{Ärger}); and a missing value is NULL. As in Nushell, \code{=} and
+\code{/=} treat NULL as a value: \code{(= :city nil)} finds the empty cells, and
+\code{(/= :city "Bruchsal")} keeps them; \code{in} finds NULL only if the list
+has \code{nil}. With \code{<}, \code{>}, \code{<=}, \code{>=} and \code{like}
+NULL is \emph{unknown}, neither true nor false, and \code{where} keeps only
+what is true. On SQLite this becomes \code{IS}, \code{IS NOT} and an explicit
+test in \code{IN} --- the same rows in memory exactly as in SQLite.
+\code{is-null} still works.
 
 If the symbol \code{it} occurs, the condition is ordinary Lisp with \code{it}
 bound to the row object:
@@ -304,15 +314,19 @@ the Nushell command and the function on each side; \file{spec/cases.sexp}
 shows each word on two small tables with the expected result:
 
 \begin{lstlisting}
-(:case "sort-by :desc, NULL last" :from :people
+(:case "sort-by :desc reverses the order: NULL first" :from :people
  :stages ((sort-by :age :desc :nr) (get :nr))
- :values (2 4 1 3 5))
+ :values (5 4 2 1 3))
 \end{lstlisting}
 
 Both implementations run every case in memory and on SQLite
-(\file{qss-spec-test.el} here), so the four runs must agree. Where Nushell does
-a thing differently, the case says so. To change what a word means, change
-the case first.
+(\file{qss-spec-test.el} here), so the four runs must agree. When \code{nu} is
+installed, every case runs in Nushell too (checked with 0.116.1): the same
+result, or the case says why not. Where Nushell stops with an error
+(\code{not}, \code{and}, \code{or} over a missing value), \qss{} goes on, and
+\code{group-by} keeps the type of a key where Nushell turns it into text; the
+cases mark these with \code{:differs}. To change what a word means, change the
+case first.
 
 % ======================================================================
 \chapter{The REPL}
@@ -372,7 +386,7 @@ Long tables show the first \code{qss-repl-max-rows} rows and a
 \item words with the value under point: \code{(where (= :status "paid"))},
   \code{(where (/= \ldots))}, \code{(where (> :amount 120.0))} for numbers,
   \code{(where (is-null :city))} for an empty cell, the day for a time;
-  then \code{sort-by}, \code{group-by}, \code{select} and \code{reject} on that
+  then \code{sort-by}, \code{group-sum}, \code{select} and \code{reject} on that
   column, and copying the value;
 \item commands with typed arguments whose first argument fits the row or the
   value (section~\ref{sec:commands});
@@ -396,11 +410,11 @@ sizes in bytes, durations in nanoseconds, times with seconds.
 
 On an SQLite source the pipe stays a query until the rows are needed.
 \code{where}, \code{sort-by}, \code{first}, \code{count}, \code{select},
-\code{reject}, \code{columns}, \code{group-by}, \code{summarize} and
+\code{reject}, \code{columns}, \code{group-sum}, \code{summarize} and
 \code{join} (with a query of the same file) become SQL with \code{?}
 parameters; a word that cannot (a condition with \code{it}, \code{each},
 \code{last}, \code{get}) fetches the rows and goes on in memory. After
-\code{group-by}, a \code{where} on the aggregates is SQL too (what SQL calls
+\code{group-sum}, a \code{where} on the aggregates is SQL too (what SQL calls
 HAVING), and \kbd{RET} on a group fetches its rows with a query of its own.
 
 \begin{Verbatim}
@@ -409,7 +423,7 @@ qss> (sqlite (qss-demo-database) "Orders") (where (> :amount 100))
 SELECT *
 FROM "Orders"
 WHERE ("Amount" > ?)
-ORDER BY "OrderDate" IS NULL, "OrderDate" DESC
+ORDER BY "OrderDate" IS NULL DESC, "OrderDate" DESC, rowid DESC
 LIMIT ?
 Parameters: (100 20)
 \end{Verbatim}
@@ -998,12 +1012,12 @@ question is a pipe:
 
 ;; the macros used most, over all three million rows
 (qss-display-> (xref "occurrences") (where (= :context "macro-use"))
-               (group-by :value) (sort-by :count :desc) (first 20))
+               (group-sum :value) (sort-by :count :desc) (first 20))
 
 ;; who still uses what became obsolete
 (qss-display-> (xref "occurrences") (where (in :value '("defadvice" "when-let")))
                (join (xref "files") :on (:file-id :id))
-               (group-by :origin :package :value) (sort-by :count :desc))
+               (group-sum :origin :package :value) (sort-by :count :desc))
 \end{lstlisting}
 
 The words run as SQL in SQLite; only the rows shown come into Emacs.
@@ -1077,8 +1091,9 @@ Little in \qss{} is new; it puts old ideas together in Emacs.
 \item[dbplyr] A pipe over a database table stays a query and becomes SQL only
   when the rows are needed; the same words work in memory and in the database.
   \url{https://dbplyr.tidyverse.org/}
-\item[SQL] The meaning of the comparisons: \code{like}, \code{in}, and NULL as
-  unknown in a three-valued logic.
+\item[SQL] The meaning of \code{like}, and of \code{<}, \code{>} with NULL as
+  unknown in a three-valued logic; \code{=} with NULL follows Nushell
+  (\code{IS} in SQL).
 \item[SQLite] One file as the store of everything, source and target alike.
 \item[CLIM and Dynamic Windows] Presentations, presentation types,
   \code{accept}, commands with typed arguments offered on the objects shown.

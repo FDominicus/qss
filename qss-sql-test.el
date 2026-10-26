@@ -100,7 +100,7 @@ the mapping of names to keys."
       (should (string-match-p "FROM \"HT_Kunden\"" text))
       (should (string-search "\"Umsatz\" > ?" text))
       (should (string-search "\"Name1\" LIKE ?" text))
-      (should (string-search "ORDER BY \"Umsatz\" IS NULL, \"Umsatz\" DESC" text))
+      (should (string-search "ORDER BY \"Umsatz\" IS NULL DESC, \"Umsatz\" DESC, rowid DESC" text))
       (should (string-search "LIMIT ?" text))
       (should (string-search "Parameters: (500 \"A%\" 3)" text))
       ;; values never become text in the SQL
@@ -130,7 +130,11 @@ the mapping of names to keys."
       (should (equal (qss-stest--same (where (> :umsatz limit))) '(1 5)))
       (should (equal (qss-stest--same (where (>= :umsatz limit))) '(1 2 5)))
       (should (equal (qss-stest--same (where (= :ort "Bruchsal"))) '(1 3)))
-      (should (equal (qss-stest--same (where (/= :ort "Bruchsal"))) '(2 5)))   ; NULL not included
+      ;; = and /= treat NULL as a value, as Nushell (IS, IS NOT in SQL)
+      (should (equal (qss-stest--same (where (/= :ort "Bruchsal"))) '(2 4 5)))
+      (should (equal (qss-stest--same (where (= :ort nil))) '(4)))
+      (should (equal (qss-stest--same (where (in :ort '(nil "Karlsruhe")))) '(2 4)))
+      (should (equal (qss-stest--same (where (not (in :ort orte)))) '(2 4)))
       (should (equal (qss-stest--same (where (in :ort orte))) '(1 3 5)))
       (should (equal (qss-stest--same (where (in :ort '()))) '()))
       (should (equal (qss-stest--same (where (like :name1 "%a%"))) '(1 3 5)))  ; ignoring case
@@ -138,7 +142,7 @@ the mapping of names to keys."
       (should (equal (qss-stest--same (where (is-null :umsatz))) '(3)))
       (should (equal (qss-stest--same (where (not-null :strasse))) '(1 3 4 5)))
       (should (equal (qss-stest--same (where (or (is-null :ort) (< :umsatz 400)))) '(2 4)))
-      (should (equal (qss-stest--same (where (not (= :ort "Bruchsal")))) '(2 5)))
+      (should (equal (qss-stest--same (where (not (= :ort "Bruchsal")))) '(2 4 5)))
       (should (equal (qss-stest--same (where (> :datum "2025-06-01"))) '(3 5)))
       (should (equal (qss-stest--same (where (> :datum seit))) '(3 5)))      ; Lisp time as a parameter
       (should (equal (qss-stest--same (where (= :plz 76646)) (where (> :kunde-nr 1))) '(3 5)))
@@ -147,14 +151,15 @@ the mapping of names to keys."
 (ert-deftest qss-sql-sort-first-same-as-memory ()
   (qss-stest--with-db
     (should (equal (qss-stest--same (sort-by umsatz)) '(4 2 5 1 3)))       ; NULL last
-    (should (equal (qss-stest--same (sort-by umsatz :desc)) '(1 5 2 4 3))) ; descending too
-    (should (equal (qss-stest--same (sort-by ort) (sort-by plz :desc)) '(1 3 5 2 4)))
+    ;; :desc reverses the whole order (Nushell's sort-by -r): NULL first, ties reversed
+    (should (equal (qss-stest--same (sort-by umsatz :desc)) '(3 1 5 2 4)))
+    (should (equal (qss-stest--same (sort-by ort) (sort-by plz :desc)) '(4 5 3 1 2)))
     (should (equal (qss-stest--same (first 2)) '(1 2)))
     (should (equal (qss-stest--same (first 3) (first 2)) '(1 2)))
     ;; where after first: a subquery, not just a WHERE in front
     (should (equal (qss-stest--same (first 2) (where (= :ort "Bruchsal"))) '(1)))
     (should (equal (qss-stest--same (sort-by umsatz :desc) (first 3) (sort-by name1))
-                   '(1 2 5)))
+                   '(1 5 3)))
     (should (string-match-p "FROM (\n" (qss-sql (qss-> (qss-stest--k) (first 2)
                                                       (where (= :ort "Bruchsal"))))))))
 
@@ -181,13 +186,13 @@ the mapping of names to keys."
     (should (equal (mapcar (lambda (r) (qss-field r 'plz))
                            (qss-table-rows (qss-> (qss-stest--k) (where (= :ort "Bruchsal")) (get plz))))
                    '(76646 76646)))
-    ;; group-by is SQL now (GROUP BY); groups sorted by key, NULL last,
-    ;; so equal counts keep that order
-    (let ((g (qss-> (qss-stest--k) (group-by ort) (sort-by count :desc))))
+    ;; group-sum is SQL (GROUP BY); groups sorted by key, NULL last;
+    ;; :desc reverses the whole order, so equal counts come reversed
+    (let ((g (qss-> (qss-stest--k) (group-sum ort) (sort-by count :desc))))
       (should (qss-relation-p g))
       (should (equal (mapcar (lambda (r) (list (qss-field r 'ort) (qss-field r 'count)))
                              (qss-collect g))
-                     '(("Bruchsal" 2) ("Heidelsheim" 1) ("Karlsruhe" 1) (nil 1)))))
+                     '(("Bruchsal" 2) (nil 1) ("Karlsruhe" 1) ("Heidelsheim" 1)))))
     (should (equal (qss-stest--ids (qss-> (qss-stest--k) (sort-by kunde-nr) (last 2))) '(4 5)))
     (should-error (qss-> (qss-stest--k) (where (string-suffix-p "X" :name1)) sql)
                   :type 'user-error)))
@@ -241,14 +246,14 @@ the mapping of names to keys."
     ;; sort first, then select: ORDER BY may name a column that is not selected
     (let ((rel (qss-> (qss-stest--k) (sort-by umsatz :desc) (select kunde-nr name1))))
       (should (string-search "SELECT \"KundeNr\", \"Name1\"" (qss-sql rel)))
-      (should (string-search "ORDER BY \"Umsatz\" IS NULL, \"Umsatz\" DESC" (qss-sql rel)))
-      (should (equal (mapcar (lambda (r) (plist-get r :kunde-nr)) (qss-collect rel)) '(1 5 2 4 3))))
+      (should (string-search "ORDER BY \"Umsatz\" IS NULL DESC, \"Umsatz\" DESC, rowid DESC" (qss-sql rel)))
+      (should (equal (mapcar (lambda (r) (plist-get r :kunde-nr)) (qss-collect rel)) '(3 1 5 2 4))))
     (should (equal (qss-> (qss-stest--k) (where (> :umsatz 100)) (sort-by umsatz) (select name1)
                           (get name1) collect)
                    '("Bernd" "Eva" "Anna Meier")))
     ;; and in memory the same
     (should (equal (qss-> (qss-as-table (qss-stest--k)) (sort-by umsatz :desc) (select kunde-nr) (get kunde-nr) collect)
-                   '(1 5 2 4 3)))
+                   '(3 1 5 2 4)))
     (should (equal (qss-> (qss-stest--k) (where (> :umsatz 500)) (select kunde-nr umsatz) collect)
                    '((:kunde-nr 1 :umsatz 1200.5) (:kunde-nr 5 :umsatz 999.99))))
     (should-error (qss-> (qss-stest--k) (select no-such-column)) :type 'user-error)))

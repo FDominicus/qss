@@ -87,7 +87,7 @@
       (should-error (qss-> (sqlite db "Orders") (join (sqlite db "Customers") :on customer-no)
                            (where (= :city "London")) (delete-rows))
                     :type 'user-error)
-      (should-error (qss-> (sqlite db "Orders") (group-by status) (where (= :count 1)) (delete-rows))
+      (should-error (qss-> (sqlite db "Orders") (group-sum status) (where (= :count 1)) (delete-rows))
                     :type 'user-error)
       (should-error (qss-> (sqlite db "Orders") (where (= :order-no 1)) (update-rows :no-such 1))
                     :type 'user-error)

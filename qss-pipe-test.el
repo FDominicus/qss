@@ -45,13 +45,15 @@
   (should (qss-op-= "a" "a"))
   (should-not (qss-op-= "a" "b"))
   (should (qss-op-= 3 3.0))
-  (should-not (qss-op-= nil nil))                ; NULL = NULL is not true
-  (should-not (qss-op-/= nil 1))
+  (should (qss-op-= nil nil))                   ; NULL = NULL, as in Nushell
+  (should-not (qss-op-= nil "a"))
+  (should (qss-op-/= nil 1))
   (should (qss-op-< "Anna" "Bernd"))
   (should (qss-op-<= 2 2))
   (should-not (qss-op-> nil 1))
   (should (qss-op-in "b" '("a" "b")))
-  (should-not (qss-op-in nil '(nil)))
+  (should (qss-op-in nil '(nil)))
+  (should-not (qss-op-in nil '("a")))
   (should (qss-op-like "Bruchsal" "bruch%"))
   (should (qss-op-like "a.b" "a._"))
   (should-not (qss-op-like "axb" "a.b"))          ; a dot is no wildcard
@@ -99,13 +101,15 @@
                     (qss-count (qss-> tab (where (<= :age 30)))))))))
 
 (ert-deftest qss-where-three-valued ()
-  "NULL as in SQL: (not (= :city X)) does not keep rows without a city."
+  "NULL as in Nushell for = and /=: (not (= :city X)) keeps rows without a city.
+For < > it is unknown, as in SQL (Nushell stops with an error there)."
   (let ((tab (qss-make-table "people" qss-ptest--people)))
-    (should (equal (qss-ptest--names (qss-> tab (where (not (= :city "Bruchsal"))))) '("Bernd")))
+    (should (equal (qss-ptest--names (qss-> tab (where (not (= :city "Bruchsal"))))) '("Bernd" "dieter")))
+    (should (equal (qss-ptest--names (qss-> tab (where (= :city nil)))) '("dieter")))
     (should (equal (qss-ptest--names (qss-> tab (where (or (> :age 30) (is-null :city)))))
                    '("Anna" "dieter")))
     (should (equal (qss-ptest--names (qss-> tab (where (not (and (> :age 30) (= :city "Bruchsal"))))))
-                   '("Bernd")))                   ; Clara: age NULL -> unknown
+                   '("Bernd" "dieter")))          ; Clara: age NULL -> unknown
     (should (equal (qss-ptest--names (qss-> tab (where (or (> :age 100) (= :city "Bruchsal")))))
                    '("Anna" "Clara")))))
 
@@ -151,7 +155,8 @@
 (ert-deftest qss-sort-by-values ()
   (let ((tab (qss-make-table "people" qss-ptest--people)))
     (should (equal (qss-ptest--names (qss-> tab (sort-by age))) '("Bernd" "dieter" "Anna" "Clara")))
-    (should (equal (qss-ptest--names (qss-> tab (sort-by age :desc))) '("Anna" "dieter" "Bernd" "Clara")))
+    ;; :desc reverses the whole order, as Nushell's sort-by -r: NULL first
+    (should (equal (qss-ptest--names (qss-> tab (sort-by age :desc))) '("Clara" "Anna" "dieter" "Bernd")))
     (should (equal (qss-ptest--names (qss-> tab (sort-by name desc))) '("dieter" "Clara" "Bernd" "Anna")))
     (should (equal (qss-ptest--names (qss-> tab (sort-by :city))) '("Anna" "Clara" "Bernd" "dieter")))
     (should-error (qss-sort-by tab 'age :sideways) :type 'user-error)))
@@ -167,8 +172,11 @@
 
 (ert-deftest qss-first-last-defaults ()
   (let ((tab (qss-make-table "people" qss-ptest--people)))
-    (should (equal (qss-ptest--names (qss-> tab first)) '("Anna")))
-    (should (equal (qss-ptest--names (qss-> tab (last))) '("dieter")))
+    ;; without N the row itself, as in Nushell
+    (should (equal (qss-> tab first) '(:name "Anna" :age 40 :city "Bruchsal")))
+    (should (equal (qss-> tab (last)) '(:name "dieter" :age 31 :city nil)))
+    (should (equal (qss-> tab first (get name)) "Anna"))
+    (should (null (qss-> tab (where (> :age 100)) first)))
     (should (= 4 (qss-count (qss-> tab (first 10)))))))
 
 ;;; select, reject, get, columns, count
@@ -224,7 +232,7 @@
                    '(name age city)))
     (should (= 2 (qss-> tab (where (= :city "Bruchsal")) count)))))
 
-;;; each, group-by
+;;; each, group-sum
 
 (ert-deftest qss-each-builds-rows ()
   (let* ((tab (qss-make-table "people" qss-ptest--people))
@@ -237,13 +245,14 @@
       (should (equal (mapcar (lambda (r) (qss-field r 'value)) (qss-table-rows scalars))
                      '(4 5 5 6))))))
 
-(ert-deftest qss-group-by-counts ()
+(ert-deftest qss-group-sum-counts ()
   (let* ((tab (qss-make-table "people" qss-ptest--people))
-         (g (qss-> tab (group-by city) (sort-by count :desc))))
+         (g (qss-> tab (group-sum city) (sort-by count :desc))))
     (should (equal (mapcar #'car (qss-table-columns g)) '(city count)))
     (should (equal (mapcar (lambda (r) (list (qss-field r 'city) (qss-field r 'count)))
                            (qss-table-rows g))
-                   '(("Bruchsal" 2) ("Karlsruhe" 1) (nil 1))))
+                   ;; :desc reverses the whole order: the ties too
+                   '(("Bruchsal" 2) (nil 1) ("Karlsruhe" 1))))
     ;; RET on a group: its rows as a table
     (with-current-buffer (qss-default-action (car (qss-table-rows g)))
       (unwind-protect
@@ -254,7 +263,7 @@
 
 (ert-deftest qss-group-files-by-type ()
   (qss-ptest--with-dir dir
-    (let ((g (qss-> (files dir) (group-by type) (sort-by type))))
+    (let ((g (qss-> (files dir) (group-sum type) (sort-by type))))
       (should (equal (mapcar (lambda (r) (list (qss-field r 'type) (qss-field r 'count)))
                              (qss-table-rows g))
                      '(("dir" 1) ("file" 5)))))))

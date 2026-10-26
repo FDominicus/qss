@@ -14,7 +14,7 @@
 ;;   - the actions of the row object: open the file, kill the process ...
 ;;     (`qss-actions');
 ;;   - words with the value at point:  (where (= :status "paid")),
-;;     (where (is-null :city)), (sort-by amount :desc), (group-by user),
+;;     (where (is-null :city)), (sort-by amount :desc), (group-sum user),
 ;;     (select name), (reject mode), copy the value;
 ;;   - commands with typed arguments (`qss-define-command') whose first
 ;;     argument fits the row or the value: "Compare with file...", the
@@ -109,7 +109,7 @@ Conditions on the value first, then the words on the column."
        (let ((v (car literal)))
          (append `((where (= ,col ,v)) (where (/= ,col ,v)))
                  (and (numberp value) `((where (> ,col ,v)) (where (< ,col ,v))))))))
-     `((sort-by ,name) (sort-by ,name :desc) (group-by ,name)
+     `((sort-by ,name) (sort-by ,name :desc) (group-sum ,name)
        (select ,name) (reject ,name)))))
 
 (defun qss--label (stage)

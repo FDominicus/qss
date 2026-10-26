@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.14.0
+;; Version: 0.15.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -20,7 +20,7 @@
 ;;
 ;;   M-x qss-eval
 ;;   qss: (files "~") (where (> :size 100000)) (sort-by size :desc) (first 10)
-;;   qss: (processes) (group-by user) (sort-by count :desc)
+;;   qss: (processes) (group-sum user) (sort-by count :desc)
 ;;   qss: (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (first 20)
 ;;   qss: (files "~") (where (> :size "10mb")) (into sqlite "big-files")
 ;;

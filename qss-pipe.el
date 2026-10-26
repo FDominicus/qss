@@ -18,11 +18,11 @@
 ;;          (first 10))
 ;;
 ;; Words:  where  select  reject  sort-by  first  last  get  each
-;;         group-by  columns  count  collect (the rows as a list)
+;;         group-by (as Nushell)  columns  count  collect (the rows as a list)
 ;;         to (the table as text: (to org), (to csv) ...)
 ;;         into (store the table: (into sqlite "Name"), see qss-sql.el)
 ;;         join (with another table: (join (sqlite f "Customers") :on customer-no))
-;;         group-by with aggregates: (group-by status (sum amount) (max amount))
+;;         group-sum with aggregates: (group-sum status (sum amount) (max amount))
 ;;         summarize (one row: (summarize (sum amount) (avg amount)))
 ;;
 ;; Conditions (`where'):
@@ -35,14 +35,16 @@
 ;;       (in :type '("dir" "link"))
 ;;       (is-null :x)  (not-null :x)
 ;;       and  or  not
-;;     A missing value (nil) is NULL: comparing with it is unknown, and
-;;     `where' keeps only rows where the condition is true.
+;;     A missing value (nil) is NULL.  As in Nushell, = /= and in treat it
+;;     as a value ((= :x nil) finds it); < > <= >= and like with it are
+;;     unknown, and `where' keeps only rows where the condition is true.
 ;;   - If `it' occurs, the condition is ordinary Lisp and `it' is the
 ;;     row object:  (where (string-prefix-p "." (qss-field it 'name)))
 ;;
 ;; Column names in select, sort-by, get ... are symbols: (sort-by size :desc).
 ;;
 ;; Every word returns a table again (except `count', `collect' and `to';
+;; `first' and `last' without N return the row itself, as in Nushell;
 ;; `into' returns the stored table, as a query).
 ;; Rows stay their objects: a filtered file still opens with RET.  A
 ;; derived table knows the way back to its source; \\`g' in its buffer
@@ -63,15 +65,30 @@
 (cl-defgeneric qss-as-table (value)
   "Return VALUE as a table with its rows in memory.
 A table stays a table, a list becomes the rows.  Other sources (such
-as a query in qss-sql.el) fetch their rows here."
-  (error "Not a table: %S" value))
+as a query in qss-sql.el) fetch their rows here.  One row (an object,
+as `first' without N gives it) is a table of that row."
+  (if (qss--record-p value)
+      (qss-make-table "record" (list value))
+    (error "Not a table: %S" value)))
 
 (cl-defmethod qss-as-table ((value qss-table))
   "Return VALUE, which is a table already."
   value)
 (cl-defmethod qss-as-table ((value list))
-  "Return a table whose rows are the elements of VALUE."
-  (qss-make-table "list" value))
+  "Return a table whose rows are the elements of VALUE.
+A single row (a property list, as `first' without N gives it) is a table
+of that row."
+  (if (qss--record-p value)
+      (qss-make-table "record" (list value))
+    (qss-make-table "list" value)))
+
+(defun qss--record-p (value)
+  "Return non-nil if VALUE is one row, not a table or a list of rows.
+A property list, or an object such as a file, as `first' without N
+gives it; in Nushell a record."
+  (or (and (consp value) (keywordp (car value)))
+      (and (recordp value) (not (qss-table-p value))
+           (not (memq (type-of value) '(qss-relation qss-condition))))))
 
 (cl-defgeneric qss-as-input (value)
   "Return VALUE as input of the first stage of `qss->'.
@@ -85,7 +102,6 @@ words can still become SQL."
 
 (cl-defmethod qss-display ((value qss-table))
   "Show the table VALUE in a buffer."
-  (qss--check-whole value)
   (qss-show value))
 
 (defun qss--derive (table stage rows &optional columns again)
@@ -118,34 +134,6 @@ AGAIN is a function that applies the same word to TABLE read anew."
   "Return the column spec NAME of TABLE, or a plain one."
   (or (assq name (qss-table-columns table))
       (qss--column-spec name)))
-
-;; After a join a name both tables have is ambiguous (unless :suffix or
-;; :prefix renamed the other side): its column spec carries :ambiguous.
-;; Using such a name is an error, and so is showing the table with it;
-;; select or reject the other columns and the table is plain again.
-
-(defun qss--ambiguous-names (table)
-  "Return the names of the ambiguous columns of TABLE."
-  (cl-loop for spec in (qss-table-columns table)
-           when (and (consp spec) (plist-get (cdr spec) :ambiguous)) collect (car spec)))
-
-(defun qss--check-names (table names)
-  "Signal an error if one of NAMES is an ambiguous column of TABLE."
-  (let ((bad (cl-intersection (mapcar #'qss--name names) (qss--ambiguous-names table))))
-    (when bad
-      (qss--ambiguous-error bad))))
-
-(defun qss--ambiguous-error (names)
-  "Signal that NAMES are in both tables of a join."
-  (user-error "Column%s %s in both tables of the join: join with :suffix or :prefix, or select others"
-              (if (cdr names) "s" "") (mapconcat #'symbol-name names ", ")))
-
-(defun qss--check-whole (table)
-  "Signal an error if TABLE still has an ambiguous column.
-For showing or collecting the whole table."
-  (when (qss-table-p table)
-    (let ((bad (qss--ambiguous-names table)))
-      (when bad (qss--ambiguous-error bad)))))
 
 ;;; ------------------------------------------------------------------
 ;;; Comparisons with the meaning of SQL
@@ -207,15 +195,17 @@ The time is local time, in the form of `qss-time'."
         (t (user-error "Cannot compare %S with %S" a b))))
 
 (defun qss-op-= (a b)
-  "Return non-nil if A equals B (numbers, strings, times); NULL is never equal."
-  (let ((c (if (or (stringp a) (stringp b) (numberp a) (numberp b) (qss--time-p a))
-               (ignore-errors (qss--compare a b))
-             (and a b (if (equal a b) 0 1)))))
-    (eql c 0)))
+  "Return non-nil if A equals B (numbers, strings, times).
+NULL (nil) is a value here, as in Nushell: equal to NULL, not to anything else."
+  (cond ((or (null a) (null b)) (and (null a) (null b)))
+        (t (let ((c (if (or (stringp a) (stringp b) (numberp a) (numberp b) (qss--time-p a))
+                        (ignore-errors (qss--compare a b))
+                      (if (equal a b) 0 1))))
+             (eql c 0)))))
 
 (defun qss-op-/= (a b)
-  "Return non-nil if A and B are both present and differ."
-  (and a b (not (qss-op-= a b))))
+  "Return non-nil if A and B differ; NULL differs from every value but NULL."
+  (not (qss-op-= a b)))
 
 (defun qss-op-< (a b)
   "Return non-nil if A is less than B."
@@ -242,8 +232,9 @@ The time is local time, in the form of `qss-time'."
   (not (null a)))
 
 (defun qss-op-in (a list)
-  "Return non-nil if A equals an element of LIST (by `qss-op-=')."
-  (and a (cl-some (lambda (x) (qss-op-= a x)) list) t))
+  "Return non-nil if A equals an element of LIST (by `qss-op-=').
+NULL is in LIST only if LIST has nil, as in Nushell."
+  (and (cl-some (lambda (x) (qss-op-= a x)) list) t))
 
 (defun qss--like-regexp (pattern)
   "Return the SQL LIKE PATTERN as a regexp."
@@ -298,15 +289,18 @@ VALUES: the values, evaluated at run time, in the order of N."
 
 ;; Three-valued logic as in SQL: a comparison with NULL is neither true
 ;; nor false but unknown (`qss-unknown'); `not' leaves unknown unknown,
-;; and `where' keeps only what is true.  So (not (= :city "Bruchsal"))
-;; returns the same rows in memory as in SQL: not those without a city.
+;; and `where' keeps only what is true -- for < > <= >= and like.  `=',
+;; `/=' and `in' treat NULL as a value, as Nushell does: (= :city nil)
+;; finds the rows without a city, and (not (= :city "Bruchsal")) keeps
+;; them.  In SQL the same: IS and IS NOT.  Where Nushell stops with an
+;; error (not, and, or over a comparison with NULL), unknown goes on.
 
-(defconst qss--null-ops '(= /= < > <= >= like in)
+(defconst qss--null-ops '(< > <= >= like)
   "Operators that return unknown when given NULL.")
 
 (defun qss--null-safe (fn a b)
-  "Call FN on A and B; unknown if A is missing (for `in' only A counts) or B is."
-  (if (or (null a) (and (null b) (not (eq fn #'qss-op-in))))
+  "Call FN on A and B; unknown if A or B is missing."
+  (if (or (null a) (null b))
       'qss-unknown
     (and (funcall fn a b) t)))
 
@@ -338,25 +332,12 @@ VALUES: the values, evaluated at run time, in the order of N."
         ((memq (car form) '(quote function)) form)
         ((memq (car form) qss--null-ops)
          `(qss--null-safe #',(alist-get (car form) qss--operators)
-                          ,@(let ((i 0))
-                              (mapcar (lambda (arg)
-                                        (setq i (1+ i))
-                                        (if (or (keywordp arg) (and (eq (car form) 'in) (= i 2)))
-                                            (qss--translate arg)
-                                          `(qss--value-arg ,(qss--translate arg) ',form)))
-                                      (cdr form)))))
+                          ,@(mapcar #'qss--translate (cdr form))))
         ((eq (car form) 'and) `(qss--and3 ,@(mapcar #'qss--translate (cdr form))))
         ((eq (car form) 'or) `(qss--or3 ,@(mapcar #'qss--translate (cdr form))))
         ((eq (car form) 'not) `(qss--not3 ,(qss--translate (cadr form))))
         (t (let ((op (alist-get (car form) qss--operators)))
              (cons (or op (car form)) (mapcar #'qss--translate (cdr form)))))))
-
-(defun qss--value-arg (value form)
-  "Return VALUE, a value in the condition FORM; nil there is an error.
-NULL is asked for with is-null, as in SQL, not with a value nil."
-  (if (null value)
-      (user-error "nil as a value in %S: use (is-null :column) for NULL" form)
-    value))
 
 (defun qss--condition-columns (form)
   "Return the column names (keywords) FORM mentions, outside of quote."
@@ -434,7 +415,7 @@ become SQL."
     (message "Copied: %s" v)))
 
 (cl-defstruct (qss-group (:constructor qss--make-group) (:copier nil))
-  "A group from `qss-group-by' or `qss-summarize'.
+  "A group from `qss-group-sum' or `qss-summarize'.
 KEYS: alist (COLUMN . VALUE) of the grouping columns.  COUNT: the number
 of rows.  AGGS: alist (NAME . VALUE) of the aggregates.  ROWS: the rows
 of the group, when it was made in memory.  SOURCE: the query the group
@@ -486,8 +467,6 @@ The word filter, as in Nushell; methods are defined on `qss-where'.")
   "Filter the rows of TABLE in memory by COND."
   (let ((table (qss-as-table table))
         (pred (qss--predicate cond)))
-    (when (qss-condition-p cond)
-      (qss--check-names table (qss--condition-columns (qss-condition-form cond))))
     (qss--derive table (format "where %s" (qss--describe-condition cond))
                  (cl-remove-if-not pred (qss-table-rows table))
                  (qss-table-columns table)
@@ -531,7 +510,6 @@ and \\`a' keep working; only the display shows the selection, and
   "Keep the columns COLS of TABLE, in memory."
   (let* ((table (qss-as-table table))
          (names (mapcar #'qss--name cols)))
-    (qss--check-names table names)
     (qss--project table names
                   (format "select %s" (mapconcat #'symbol-name names " "))
                   (lambda (tab) (apply #'qss-select tab cols)))))
@@ -575,9 +553,8 @@ KEYS are columns, each followed by :asc or :desc if wanted."
     (nreverse result)))
 
 (defun qss--check-sort-names (table names)
-  "Signal an error if one of NAMES is not a column of TABLE, or is ambiguous.
+  "Signal an error if one of NAMES is not a column of TABLE.
 Only for data rows; objects such as files have more fields than columns."
-  (qss--check-names table names)
   (when (qss--data-rows-p table)
     (let ((known (mapcar #'car (qss-table-columns table))))
       (dolist (n names)
@@ -592,49 +569,64 @@ Only for data rows; objects such as files have more fields than columns."
 (cl-defgeneric qss-sort-by (table &rest keys)
   "Return TABLE sorted by KEYS: columns, each followed by :asc (default)
 or :desc if wanted:  (sort-by :age :desc :nr).
-Sorting uses the raw value; missing values always come last.  The sort
-is stable: an earlier order breaks the ties.")
+As in Nushell: the sort is stable, missing values come last, and :desc
+reverses the whole order (missing values first, ties reversed), as
+sort-by -r.  Several columns are sorted the last first, so
+\(sort-by :age :desc :nr) is sort-by nr | sort-by age -r.")
+
+(defun qss--sort-rows (rows name desc)
+  "Return ROWS sorted stably by the column NAME, missing values last;
+reversed as a whole if DESC."
+  (let ((sorted (sort (copy-sequence rows)
+                      (lambda (r1 r2)
+                        (let ((a (qss-field r1 name)) (b (qss-field r2 name)))
+                          (cond ((null a) nil)
+                                ((null b) t)
+                                (t (eql -1 (qss--compare a b)))))))))
+    (if desc (nreverse sorted) sorted)))
 
 (cl-defmethod qss-sort-by (table &rest keys)
   "Sort TABLE by KEYS in memory; KEYS as in the generic function."
   (let* ((table (qss-as-table table))
          (parsed (qss--sort-keys keys))
          (_ (qss--check-sort-names table (mapcar #'car parsed)))
-         (rows (sort (copy-sequence (qss-table-rows table))
-                     (lambda (r1 r2)
-                       (cl-loop for (name . desc) in parsed
-                                for a = (qss-field r1 name)
-                                for b = (qss-field r2 name)
-                                do (cond ((and (null a) (null b)))
-                                         ((null a) (cl-return nil))
-                                         ((null b) (cl-return t))
-                                         (t (let ((c (qss--compare a b)))
-                                              (unless (eql c 0)
-                                                (cl-return (if desc (eql c 1) (eql c -1)))))))
-                                finally return nil)))))
+         (rows (qss-table-rows table)))
+    (dolist (k (reverse parsed))
+      (setq rows (qss--sort-rows rows (car k) (cdr k))))
     (qss--derive table (qss--sort-stage parsed)
                  rows (qss-table-columns table)
                  (lambda (tab) (apply #'qss-sort-by tab keys)))))
 
 (cl-defgeneric qss-first (table &optional n)
-  "Return the first N rows of TABLE (default 1).")
+  "Return the first N rows of TABLE.
+Without N, as in Nushell, the first row itself, not a table: a property
+list, an object, or the value after `get'; nil if there is none.")
+
+(defun qss--row-itself (row)
+  "Return ROW as `first' and `last' without N give it: a value unwrapped."
+  (if (qss-value-p row) (qss-value-value row) row))
 
 (cl-defmethod qss-first (table &optional n)
-  "Take the first N rows of TABLE in memory."
-  (let ((table (qss-as-table table)) (n (or n 1)))
-    (qss--derive table (format "first %d" n)
-                 (take n (qss-table-rows table)) (qss-table-columns table)
-                 (lambda (tab) (qss-first tab n)))))
+  "Take the first N rows of TABLE in memory (without N the first row)."
+  (let ((table (qss-as-table table)))
+    (if (null n)
+        (qss--row-itself (car (qss-table-rows table)))
+      (qss--derive table (format "first %d" n)
+                   (take n (qss-table-rows table)) (qss-table-columns table)
+                   (lambda (tab) (qss-first tab n))))))
 
 (cl-defgeneric qss-last (table &optional n)
-  "Return the last N rows of TABLE (default 1).")
+  "Return the last N rows of TABLE, in their order.
+Without N the last row itself, as `qss-first'.")
 
 (cl-defmethod qss-last (table &optional n)
-  "Take the last N rows of TABLE in memory."
-  (let ((table (qss-as-table table)) (n (or n 1)))
-    (qss--derive table (format "last %d" n)
-                 (last (qss-table-rows table) n) (qss-table-columns table)
-                 (lambda (tab) (qss-last tab n)))))
+  "Take the last N rows of TABLE in memory (without N the last row)."
+  (let ((table (qss-as-table table)))
+    (if (null n)
+        (qss--row-itself (car (last (qss-table-rows table))))
+      (qss--derive table (format "last %d" n)
+                   (last (qss-table-rows table) n) (qss-table-columns table)
+                   (lambda (tab) (qss-last tab n))))))
 
 (cl-defgeneric qss-count (table)
   "Return the number of rows of TABLE.")
@@ -660,25 +652,30 @@ themselves; after `get' they are the plain values.  A query (qss-sql)
 runs here.")
 
 (cl-defmethod qss-collect (table)
-  "Return the rows of TABLE as a list; single values unwrapped."
-  (let ((table (qss-as-table table)))
-    (qss--check-whole table)
-    (mapcar (lambda (row) (if (qss-value-p row) (qss-value-value row) row))
-            (qss-table-rows table))))
+  "Return the rows of TABLE as a list; single values unwrapped.
+One row (from `first' without N) is returned as it is."
+  (cond ((qss--record-p table) table)
+        ;; a single value, as `get' after `first' gives it
+        ((not (or (listp table) (recordp table))) table)
+        (t (let ((table (qss-as-table table)))
+             (mapcar (lambda (row) (if (qss-value-p row) (qss-value-value row) row))
+                     (qss-table-rows table))))))
 
 (cl-defgeneric qss-get (table col)
   "Return the values of column COL of TABLE as a table with one column.")
 
 (cl-defmethod qss-get (table col)
-  "Return the values of COL of TABLE, in memory."
+  "Return the values of COL of TABLE, in memory.
+Of one row (from `first' without N) the value itself, as in Nushell."
+  (if (qss--record-p table)
+      (qss-field table (qss--name col))
   (let* ((table (qss-as-table table))
          (name (qss--name col)))
-    (qss--check-names table (list name))
     (qss--derive table (format "get %s" name)
                  (mapcar (lambda (r) (qss--value name (qss-field r name)))
                          (qss-table-rows table))
                  (list (qss--spec-of table name))
-                 (lambda (tab) (qss-get tab col)))))
+                 (lambda (tab) (qss-get tab col))))))
 
 (cl-defgeneric qss-columns-of (table)
   "Return the column names of TABLE as a table.")
@@ -710,10 +707,10 @@ runs here.")
                  (lambda (tab) (qss-each tab fn)))))
 
 (defconst qss-aggregates '(sum avg min max count)
-  "The aggregates of `group-by' and `summarize'.")
+  "The aggregates of `group-sum' and `summarize'.")
 
 (defun qss--group-args (args)
-  "Return (KEYS . AGGS) from the ARGS of `group-by' or `summarize'.
+  "Return (KEYS . AGGS) from the ARGS of `group-sum' or `summarize'.
 KEYS: the grouping columns (symbols).  AGGS: list of (FN COLUMN NAME)
 from forms (FN COLUMN) or (FN COLUMN :as NAME); NAME defaults to
 FN-COLUMN, e.g. sum-amount."
@@ -810,19 +807,50 @@ their keys, missing values last, as on SQLite."
                                     (if (keywordp a) (symbol-name (qss--name a)) (format "%s" a)))
                                   args " ")))
 
-(cl-defgeneric qss-group-by (table &rest args)
+(cl-defgeneric qss-group-sum (table &rest args)
   "Group the rows of TABLE by the columns in ARGS, with aggregates.
 ARGS are column names and aggregates (FN COLUMN) or (FN COLUMN :as
-NAME), FN one of `qss-aggregates':  (group-by status (sum amount)).
+NAME), FN one of `qss-aggregates':  (group-sum status (sum amount)).
 One row per group: the keys, the count and the aggregates, sorted by
 the keys (missing values last).  RET on a group shows its rows.")
 
-(cl-defmethod qss-group-by (table &rest args)
+(cl-defmethod qss-group-sum (table &rest args)
   "Group the rows of TABLE by ARGS, in memory."
   (pcase-let ((`(,keys . ,aggs) (qss--group-args args)))
-    (unless keys (user-error "group-by needs a column; for all rows use summarize"))
-    (qss--group table keys aggs (qss--group-stage "group-by" args)
-                (lambda (tab) (apply #'qss-group-by tab args)))))
+    (unless keys (user-error "group-sum needs a column; for all rows use summarize"))
+    (qss--group table keys aggs (qss--group-stage "group-sum" args)
+                (lambda (tab) (apply #'qss-group-sum tab args)))))
+
+(cl-defgeneric qss-group-by (table &rest cols)
+  "Group the rows of TABLE by the columns COLS, as Nushell's group-by --to-table.
+One row per group: the columns COLS and `items', the rows of the group,
+in the order the keys first appear; missing keys (NULL) are a group too.
+For counts and sums use `qss-group-sum'.")
+
+(cl-defmethod qss-group-by (table &rest cols)
+  "Group the rows of TABLE by COLS, in memory (also for a query: the rows
+are fetched)."
+  (let* ((table (qss-as-table table))
+         (names (mapcar #'qss--name cols))
+         (groups (make-hash-table :test #'equal))
+         (order nil))
+    (unless names (user-error "group-by needs a column"))
+    (dolist (r (qss-table-rows table))
+      (let ((k (qss--join-key r names)))
+        (unless (gethash k groups) (push k order))
+        (push r (gethash k groups))))
+    (qss--derive
+     table (qss--group-stage "group-by" cols)
+     (mapcar (lambda (k)
+               (let* ((rows (reverse (gethash k groups)))
+                      (first-row (car rows)))
+                 (append (cl-mapcan (lambda (n) (list (intern (format ":%s" n)) (qss-field first-row n)))
+                                    names)
+                         (list :items rows))))
+             (nreverse order))
+     (append (mapcar (lambda (n) (qss--spec-of table n)) names)
+             (list (list 'items :format (lambda (v) (format "%d rows" (length v))))))
+     (lambda (tab) (apply #'qss-group-by tab cols)))))
 
 (cl-defgeneric qss-summarize (table &rest aggs)
   "Return one row with the count of TABLE and the aggregates AGGS.
@@ -832,7 +860,7 @@ AGGS are (FN COLUMN) or (FN COLUMN :as NAME):
 (cl-defmethod qss-summarize (table &rest aggs)
   "Summarize TABLE by AGGS, in memory."
   (pcase-let ((`(,keys . ,aggs*) (qss--group-args aggs)))
-    (when keys (user-error "summarize takes only aggregates such as (sum amount); for groups use group-by"))
+    (when keys (user-error "summarize takes only aggregates such as (sum amount); for groups use group-sum"))
     (qss--group table nil aggs* (qss--group-stage "summarize" aggs)
                 (lambda (tab) (apply #'qss-summarize tab aggs)))))
 
@@ -879,42 +907,30 @@ have in common.  LEFT-NAMES and RIGHT-NAMES are the column names."
     (list on kind suffix prefix)))
 
 (defun qss--join-columns (left-names right-names pairs &optional suffix prefix)
-  "Return (RIGHT-COLUMNS . AMBIGUOUS) of a join.
-RIGHT-COLUMNS: the right columns kept and their names in the result, a
-list of (RIGHT-NAME . RESULT-NAME).  A join column with the same name on
-both sides appears once.  SUFFIX or PREFIX is added to the names of the
-other right columns (not to the join columns), as in Nushell.  A right
-column whose name the left side has too is left out: AMBIGUOUS lists
-these names; using one of them is an error (`qss--check-names')."
-  (let ((result nil) (ambiguous nil) (taken (copy-sequence left-names))
-        (keys (mapcar #'cdr pairs)))
+  "Return the right columns kept by a join and their names in the result.
+A list of (RIGHT-NAME . RESULT-NAME), as Nushell's join does it: a join
+column both sides have appears once; SUFFIX or PREFIX goes on every other
+right column; a name the left side has too gets _ (name_, name__ ...)."
+  (let ((result nil) (taken (copy-sequence left-names)))
     (dolist (n right-names)
       (unless (cl-some (lambda (p) (and (eq (cdr p) n) (eq (car p) n))) pairs)
-        (let ((new (if (and (or suffix prefix) (not (memq n keys)))
+        (let ((new (if (or suffix prefix)
                        (intern (concat prefix (symbol-name n) suffix))
                      n)))
-          (if (memq new taken)
-              (push new ambiguous)
-            (push new taken)
-            (push (cons n new) result)))))
-    (cons (nreverse result) (nreverse ambiguous))))
-
-(defun qss--mark-ambiguous (specs names)
-  "Return the column SPECS with those named in NAMES marked :ambiguous."
-  (mapcar (lambda (spec)
-            (if (memq (car spec) names)
-                (cons (car spec) (plist-put (copy-sequence (cdr spec)) :ambiguous t))
-              spec))
-          specs))
+          (while (memq new taken)
+            (setq new (intern (format "%s_" new))))
+          (push new taken)
+          (push (cons n new) result))))
+    (nreverse result)))
 
 (defun qss--join-key (row names)
-  "Return the values of NAMES in ROW as a key, or nil if one is missing.
-Whole floats count as integers, so 3 and 3.0 match."
-  (let ((key (mapcar (lambda (n)
-                       (let ((v (qss-field row n)))
-                         (if (and (floatp v) (= v (ffloor v))) (truncate v) v)))
-                     names)))
-    (and (not (memq nil key)) key)))
+  "Return the values of NAMES in ROW as a key (a list).
+Whole floats count as integers, so 3 and 3.0 match; NULL matches NULL,
+as in Nushell."
+  (mapcar (lambda (n)
+            (let ((v (qss-field row n)))
+              (if (and (floatp v) (= v (ffloor v))) (truncate v) v)))
+          names))
 
 (cl-defgeneric qss-join (table other &rest options)
   "Join TABLE with OTHER: rows whose join columns are equal, side by side.
@@ -922,10 +938,9 @@ OPTIONS: :on COLUMN, :on (LEFT RIGHT) or :on ((L1 R1) (L2 R2)) (default:
 all columns both have); :kind :inner (default, only rows with a partner)
 or :left (all rows of TABLE, without a partner the columns of OTHER are
 empty); :suffix TEXT or :prefix TEXT renames the columns of OTHER
-except the join columns, as in Nushell.  A name both tables have
-(after renaming) is ambiguous: the column of TABLE stays, and using the
-name, or showing all columns, is an error.  Missing values never match,
-as in SQL.  The rows of the result are data (property lists).")
+except a join column both have, as in Nushell.  Without them a name both
+tables have gets _ on the right (name_).  NULL matches NULL, as in
+Nushell.  The rows of the result are data (property lists).")
 
 (cl-defmethod qss-join (table other &rest options)
   "Join TABLE with OTHER in memory."
@@ -935,18 +950,14 @@ as in SQL.  The rows of the result are data (property lists).")
                (left-names (mapcar #'car (qss-table-columns table)))
                (right-names (mapcar #'car (qss-table-columns other)))
                (pairs (qss--join-on on left-names right-names))
-               (_ (progn (qss--check-names table (mapcar #'car pairs))
-                         (qss--check-names other (mapcar #'cdr pairs))))
-               (`(,right-cols . ,ambiguous)
-                (qss--join-columns left-names right-names pairs suffix prefix))
+               (right-cols (qss--join-columns left-names right-names pairs suffix prefix))
                (index (make-hash-table :test #'equal)))
     (dolist (r (qss-table-rows other))
-      (let ((k (qss--join-key r (mapcar #'cdr pairs))))
-        (when k (push r (gethash k index)))))
+      (push r (gethash (qss--join-key r (mapcar #'cdr pairs)) index)))
     (let ((rows nil))
       (dolist (l (qss-table-rows table))
         (let* ((k (qss--join-key l (mapcar #'car pairs)))
-               (partners (and k (reverse (gethash k index))))
+               (partners (reverse (gethash k index)))
                (left-part (cl-mapcan (lambda (n) (list (intern (format ":%s" n)) (qss-field l n)))
                                      left-names)))
           (cond (partners
@@ -964,7 +975,7 @@ as in SQL.  The rows of the result are data (property lists).")
       (qss--derive table
                    (format "join %s%s" (qss-table-title other) (if (eq kind 'left) " (left)" ""))
                    (nreverse rows)
-                   (append (qss--mark-ambiguous (qss-table-columns table) ambiguous)
+                   (append (qss-table-columns table)
                            (mapcar (lambda (c) (cons (cdr c) (cdr (qss--spec-of other (car c)))))
                                    right-cols))
                    (lambda (tab) (apply #'qss-join tab other options))))))
@@ -1059,7 +1070,6 @@ programs.  A query fetches all its rows here.")
   "Return TABLE, in memory, as text in FORMAT."
   (let ((table (qss-as-table table))
         (format (if (stringp format) (intern format) format)))
-    (qss--check-whole table)
     (pcase format
       ((or 'text 'org 'md) (qss--aligned-text table format))
       ('csv (mapconcat (lambda (line) (concat (mapconcat #'qss--csv-field line ",") "\n"))
@@ -1091,7 +1101,8 @@ TARGET.")
 
 (defvar qss--words
   '((where . condition) (filter . condition)
-    (select . columns) (reject . columns) (get . columns) (group-by . columns)
+    (select . columns) (reject . columns) (get . columns)
+    (group-by . columns) (group-sum . columns)
     (summarize . columns) (join . join)
     (sort-by . columns)
     (first . values) (last . values) (head . values)

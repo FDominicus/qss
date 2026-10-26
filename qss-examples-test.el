@@ -51,8 +51,8 @@ with a few files there, so the tests do not depend on ~/.emacs.d."
   (qss-etest--with-fresh-db
     (should (equal (qss-etest--value "Any list of property lists is a table")
                    '((:name "Ada" :born 1815) (:name "Grace" :born 1906))))
-    (should (equal (qss-etest--value "NULL as in SQL: (not (= ...)) does not keep rows without a value")
-                   '("Bob Stone")))
+    (should (equal (qss-etest--value "NULL as in Nushell: (not (= ...)) keeps rows without a value")
+                   '("Bob Stone" "Dan Brown")))
     (should (equal (mapcar (lambda (r) (plist-get r :order-no))
                            (qss-collect (qss-etest--value "SQLite: a pipe becomes one query")))
                    '(4715 4713 4716 4711)))

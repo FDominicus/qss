@@ -83,7 +83,7 @@
      (qss-> (processes) (sort-by rss :desc) (first 5) (select pid user rss command)))
 
     ("Processes: how many per user"
-     (qss-> (processes) (group-by user) (sort-by count :desc)))
+     (qss-> (processes) (group-sum user) (sort-by count :desc)))
 
     ("Own row type: buffers visiting a file, largest first"
      (qss-> (qss-examples-buffers) (where (not-null :file)) (sort-by size :desc)))
@@ -95,8 +95,8 @@
             (sort-by born)
             collect))
 
-    ("NULL as in SQL: (not (= ...)) does not keep rows without a value"
-     ;; => ("Bob Stone")   Dan has no city: unknown, so not kept
+    ("NULL as in Nushell: (not (= ...)) keeps rows without a value"
+     ;; => ("Bob Stone" "Dan Brown")   Dan has no city: NULL is not "Bruchsal"
      (qss-> (sqlite (qss-demo-database) "Customers")
             (where (not (= :city "Bruchsal")))
             (get name)
@@ -118,7 +118,7 @@
 
     ("SQLite: the SQL of that pipe"
      ;; SELECT "OrderNo", "Amount" FROM "Orders" WHERE ("Amount" > ?)
-     ;; ORDER BY "Amount" IS NULL, "Amount" DESC   Parameters: (100)
+     ;; ORDER BY "Amount" IS NULL DESC, "Amount" DESC, rowid DESC   Parameters: (100)
      (qss-> (sqlite (qss-demo-database) "Orders")
             (where (> :amount 100))
             (sort-by amount :desc)
@@ -156,7 +156,7 @@
      ;; => paid 3 245.5, nil 2 1299.99, cancelled 1 150.0
      ;; RET on a group fetches its orders with a query of its own.
      (qss-> (sqlite (qss-demo-database) "Orders")
-            (group-by status (sum amount))
+            (group-sum status (sum amount))
             (sort-by count :desc)))
 
     ("SQLite: orders with the name of the customer (JOIN)"
@@ -167,7 +167,7 @@
     ("SQLite: turnover per city, over a join (JOIN and GROUP BY in one query)"
      (qss-> (sqlite (qss-demo-database) "Orders")
             (join (sqlite (qss-demo-database) "Customers") :on customer-no)
-            (group-by city (sum amount) (max amount))
+            (group-sum city (sum amount) (max amount))
             (sort-by sum-amount :desc)))
 
     ("Summarize: all orders in one row"

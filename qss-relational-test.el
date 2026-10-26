@@ -1,4 +1,4 @@
-;;; qss-relational-test.el --- Tests for join, group-by and summarize  -*- lexical-binding: t -*-
+;;; qss-relational-test.el --- Tests for join, group-sum and summarize  -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2026 Friedrich Dominicus
 ;; SPDX-License-Identifier: MIT
@@ -56,18 +56,14 @@
 
 (ert-deftest qss-join-inner-and-names ()
   (let ((j (qss-> qss-reltest--orders (join qss-reltest--customers :on cust))))
-    ;; status on both sides: ambiguous; the left one stays, using it is an error
-    (should (equal (mapcar #'car (qss-table-columns j)) '(no cust amount status name)))
-    (should-error (qss-> j (select no status)) :type 'user-error)
-    (should-error (qss-> j (where (= :status "gold"))) :type 'user-error)
-    (should-error (qss-> j (sort-by status)) :type 'user-error)
-    (should-error (qss-collect j) :type 'user-error)
-    ;; the other columns are plain
-    (should (equal (qss-> j (select no name) collect) '((:no 1 :name "Anna") (:no 2 :name "Bob")
-                                                       (:no 3 :name "Anna"))))
-    ;; 2 and 2.0 match; nil never matches; 9 has no partner
+    ;; status on both sides: the right one gets _, as in Nushell
+    (should (equal (mapcar #'car (qss-table-columns j)) '(no cust amount status name status_)))
+    (should (equal (qss-> j (select no status status_) collect)
+                   '((:no 1 :status "paid" :status_ "gold") (:no 2 :status nil :status_ nil)
+                     (:no 3 :status "paid" :status_ "gold"))))
+    ;; 2 and 2.0 match; 9 has no partner; nil finds no nil here
     (should (equal (qss-> j (get no) collect) '(1 2 3)))
-    ;; :suffix (or :prefix) renames the right columns but the join columns, as in Nushell
+    ;; :suffix (or :prefix) renames the right columns but a join column both have, as in Nushell
     (let ((s (qss-> qss-reltest--orders (join qss-reltest--customers :on cust :suffix "-c"))))
       (should (equal (mapcar #'car (qss-table-columns s)) '(no cust amount status name-c status-c)))
       (should (equal (qss-field (car (qss-table-rows s)) 'status-c) "gold")))
@@ -80,8 +76,8 @@
     (should (equal (qss-> j (where (is-null :name)) (get no) collect) '(4 5)))))
 
 (ert-deftest qss-join-natural-and-pairs ()
-  ;; without :on: all columns both have, here cust and status
-  (should (equal (qss-> qss-reltest--orders (join qss-reltest--customers) (get no) collect) nil))
+  ;; without :on: all columns both have, here cust and status; NULL matches NULL
+  (should (equal (qss-> qss-reltest--orders (join qss-reltest--customers) (get no) collect) '(2)))
   ;; different names on both sides
   (let ((j (qss-> '((:id 1 :x "a") (:id 2 :x "b"))
                   (join '((:ref 2 :y "B") (:ref 1 :y "A") (:ref 1 :y "AA")) :on (id ref)))))
@@ -95,11 +91,11 @@
   (should-error (qss-> '((:a 1)) (join '((:a 1)) :how a)) :type 'user-error))
 
 ;;; ------------------------------------------------------------------
-;;; group-by and summarize in memory
+;;; group-sum and summarize in memory
 
-(ert-deftest qss-group-by-aggregates ()
+(ert-deftest qss-group-sum-aggregates ()
   (let ((g (qss-> qss-reltest--orders
-                  (group-by status (sum amount) (avg amount) (max no) (count amount) (min amount :as least)))))
+                  (group-sum status (sum amount) (avg amount) (max no) (count amount) (min amount :as least)))))
     (should (equal (mapcar #'car (qss-table-columns g))
                    '(status count sum-amount avg-amount max-no count-amount least)))
     ;; sorted by key, missing last; NULL values are left out of the aggregates
@@ -108,8 +104,8 @@
                      (status "paid" count 2 sum-amount 30.0 avg-amount 15.0 max-no 3 count-amount 2 least 10.0)
                      (status nil count 1 sum-amount 5.5 avg-amount 5.5 max-no 2 count-amount 1 least 5.5))))))
 
-(ert-deftest qss-group-by-several-keys-and-ret ()
-  (let ((g (qss-> qss-reltest--orders (group-by status cust))))
+(ert-deftest qss-group-sum-several-keys-and-ret ()
+  (let ((g (qss-> qss-reltest--orders (group-sum status cust))))
     (should (equal (mapcar (lambda (r) (list (qss-field r 'status) (qss-field r 'cust) (qss-field r 'count)))
                            (qss-table-rows g))
                    '(("open" 9 1) ("open" nil 1) ("paid" 1 2) (nil 2 1))))
@@ -119,10 +115,10 @@
             (should (equal (qss-> qss--table (get no) collect) '(1 3)))
           (kill-buffer))))))
 
-(ert-deftest qss-group-by-keeps-types ()
+(ert-deftest qss-group-sum-keeps-types ()
   (let* ((tab (qss-make-table "f" '((:k "a" :size 1000) (:k "a" :size 3000))
                               '(k (size :type size))))
-         (g (qss-> tab (group-by k (sum size) (avg size) (count size)))))
+         (g (qss-> tab (group-sum k (sum size) (avg size) (count size)))))
     (should (eq 'size (plist-get (cdr (assq 'sum-size (qss-table-columns g))) :type)))
     (should (eq 'size (plist-get (cdr (assq 'avg-size (qss-table-columns g))) :type)))
     (should (eq 'number (plist-get (cdr (assq 'count-size (qss-table-columns g))) :type)))
@@ -135,15 +131,15 @@
   (should (equal (qss-reltest--rows (qss-> qss-reltest--orders (where (> :no 99)) (summarize (sum amount))))
                  '((count 0 sum-amount nil)))))
 
-(ert-deftest qss-group-by-errors ()
+(ert-deftest qss-group-sum-errors ()
   (let ((qss-contract-enabled nil))
-    (should-error (qss-> qss-reltest--orders (group-by (sum amount))) :type 'user-error)
+    (should-error (qss-> qss-reltest--orders (group-sum (sum amount))) :type 'user-error)
     (should-error (qss-> qss-reltest--orders (summarize status)) :type 'user-error)
-    (should-error (qss-> qss-reltest--orders (group-by status (median amount))) :type 'user-error))
+    (should-error (qss-> qss-reltest--orders (group-sum status (median amount))) :type 'user-error))
   ;; with the contracts, the last two stop at the boundary already
   (let ((qss-contract-enabled t))
     (should-error (qss-> qss-reltest--orders (summarize status)) :type 'qss-contract-violation)
-    (should-error (qss-> qss-reltest--orders (group-by status (median amount)))
+    (should-error (qss-> qss-reltest--orders (group-sum status (median amount)))
                   :type 'qss-contract-violation)))
 
 ;;; ------------------------------------------------------------------
@@ -169,12 +165,13 @@
     (let ((q (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust :suffix "-c")
                     (where (= :status-c "gold")) (select no name-c))))
       (should (qss-relation-p q))
-      (should (string-search "WHERE (\"status-c\" = ?)" (qss-sql q)))
+      (should (string-search "WHERE (\"status-c\" IS ?)" (qss-sql q)))
+      (should (string-search "ON l.\"cust\" IS r.\"cust\"" (qss-sql q)))
       (should (equal (qss-collect q) '((:no 1 :name-c "Anna") (:no 3 :name-c "Anna")))))
-    ;; without :suffix status is ambiguous in SQL as in memory
-    (should-error (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust)
-                         (where (= :status "gold")))
-                  :type 'user-error)))
+    ;; without :suffix the right status is status_, in SQL as in memory
+    (should (equal (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust)
+                          (where (= :status_ "gold")) (get no) collect)
+                   '(1 3)))))
 
 (ert-deftest qss-join-other-file-in-memory ()
   (qss-reltest--with-db db
@@ -182,21 +179,21 @@
       (should (qss-table-p j))
       (should (equal (qss-> j (get no) collect) '(1 2 3))))))
 
-(ert-deftest qss-group-by-sql-same-as-memory ()
+(ert-deftest qss-group-sum-sql-same-as-memory ()
   (qss-reltest--with-db db
     (let ((args '((status (sum amount) (avg amount) (max no) (count amount))
                   (status cust)
                   (cust (min status)))))
       (dolist (a args)
-        (let ((sql (apply #'qss-group-by (qss-sqlite db "orders") a))
-              (mem (apply #'qss-group-by (qss-as-table (qss-sqlite db "orders")) a)))
+        (let ((sql (apply #'qss-group-sum (qss-sqlite db "orders") a))
+              (mem (apply #'qss-group-sum (qss-as-table (qss-sqlite db "orders")) a)))
           (should (qss-relation-p sql))
           (should (string-search "GROUP BY" (qss-sql sql)))
           (should (equal (qss-reltest--rows sql) (qss-reltest--rows mem))))))))
 
-(ert-deftest qss-group-by-sql-having-and-ret ()
+(ert-deftest qss-group-sum-sql-having-and-ret ()
   (qss-reltest--with-db db
-    (let ((g (qss-> (sqlite db "orders") (group-by status (sum amount)) (where (> :sum-amount 2)))))
+    (let ((g (qss-> (sqlite db "orders") (group-sum status (sum amount)) (where (> :sum-amount 2)))))
       (should (qss-relation-p g))
       (should (equal (qss-> g (get status) collect) '("paid" nil)))
       ;; RET on a group: its rows, fetched with a query of its own
@@ -208,10 +205,10 @@
                                (if (qss-field grp 'status) '(1 3) '(2))))
               (kill-buffer))))))))
 
-(ert-deftest qss-group-by-over-join-sql ()
+(ert-deftest qss-group-sum-over-join-sql ()
   (qss-reltest--with-db db
     (let ((g (qss-> (sqlite db "orders") (join (sqlite db "customers") :on cust)
-                    (group-by name (sum amount)))))
+                    (group-sum name (sum amount)))))
       (should (qss-relation-p g))
       (should (equal (qss-reltest--rows g)
                      '((name "Anna" count 2 sum-amount 30.0) (name "Bob" count 1 sum-amount 5.5)))))))
@@ -223,11 +220,11 @@
     (should (equal (qss-reltest--rows (qss-> (sqlite db "orders") (where (> :no 99)) (summarize (sum amount))))
                    '((count 0 sum-amount nil))))))
 
-(ert-deftest qss-group-by-sql-display ()
+(ert-deftest qss-group-sum-sql-display ()
   "A grouped query is shown with its aggregates as numbers."
   (qss-reltest--with-db db
     (save-window-excursion
-      (let ((buf (qss-display (qss-> (sqlite db "orders") (group-by status (sum amount))))))
+      (let ((buf (qss-display (qss-> (sqlite db "orders") (group-sum status (sum amount))))))
         (unwind-protect
             (with-current-buffer buf
               (should (string-match-p "paid +2 +30\\.0" (buffer-string))))

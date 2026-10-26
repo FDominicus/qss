@@ -203,7 +203,7 @@ its name or the names of its parameters say so.  The menu of a row
   (qss-xref--check-summaries)
   (qss-xref--show
    (qss-> (xref "categories") (where (not (like :name "%--%")))
-          (group-by :category) (sort-by :count :desc))
+          (group-sum :category) (sort-by :count :desc))
    "Categories of functions"))
 
 ;;;###autoload

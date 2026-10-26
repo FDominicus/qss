@@ -130,5 +130,175 @@ In memory and in SQLite.  Return a list of (NAME MODE MESSAGE)."
           (should (fboundp (plist-get p :elisp)))
           (should (assq (plist-get p :word) qss--words)))))))
 
+;;; ------------------------------------------------------------------
+;;; Nushell: the model itself
+;;
+;; Each case becomes a Nushell pipeline (`qss-spec-test--nu-script') and
+;; runs in nu.  A case without a :nushell note must give the expected
+;; result there too; a case noted (:differs ...) must give something
+;; else (otherwise the note is out of date); (:skip ...) is not run.
+;; Cases Nushell cannot write (like, head, group-by ...) are noted.
+
+(define-error 'qss-spec-test-no-nu "No Nushell form for this")
+
+(defun qss-spec-test--nu-name (key)
+  "Return the column KEY (a keyword) as a Nushell name."
+  (substring (symbol-name key) 1))
+
+(defun qss-spec-test--nu-cell (key)
+  "Return the column KEY of the row $r as a Nushell expression."
+  (format "$r.%s" (qss-nuon--string (qss-spec-test--nu-name key))))
+
+(defun qss-spec-test--nu-value (v)
+  "Return the value V as a Nushell literal."
+  (cond ((null v) "null")
+        ((eq v t) "true")
+        ((stringp v) (qss-nuon--string v))
+        ((integerp v) (number-to-string v))
+        ((floatp v) (qss-nuon--float v))
+        ((and (consp v) (eq (car v) 'quote))
+         (format "[%s]" (mapconcat #'qss-spec-test--nu-value (cadr v) ", ")))
+        (t (signal 'qss-spec-test-no-nu (list v)))))
+
+(defun qss-spec-test--nu-condition (form)
+  "Return the condition FORM as a Nushell expression over $r."
+  (cond ((keywordp form) (qss-spec-test--nu-cell form))
+        ((atom form) (qss-spec-test--nu-value form))
+        ((eq (car form) 'quote) (qss-spec-test--nu-value form))
+        (t
+         (let ((args (mapcar #'qss-spec-test--nu-condition (cdr form))))
+           (pcase (car form)
+             ('= (format "(%s == %s)" (nth 0 args) (nth 1 args)))
+             ('/= (format "(%s != %s)" (nth 0 args) (nth 1 args)))
+             ((and op (or '< '> '<= '>=)) (format "(%s %s %s)" (nth 0 args) op (nth 1 args)))
+             ('and (format "(%s)" (mapconcat #'identity args " and ")))
+             ('or (format "(%s)" (mapconcat #'identity args " or ")))
+             ('not (format "(not %s)" (nth 0 args)))
+             ('is-null (format "(%s == null)" (nth 0 args)))
+             ('not-null (format "(%s != null)" (nth 0 args)))
+             ('in (format "(%s in %s)" (nth 0 args) (nth 1 args)))
+             (_ (signal 'qss-spec-test-no-nu (list form))))))))
+
+(defun qss-spec-test--nu-join (args)
+  "Return the Nushell join for the stage arguments ARGS of `join'."
+  (let* ((other (car args))
+         (opts (cdr args))
+         (on (plist-get opts :on))
+         (kind (plist-get opts :kind))
+         (suffix (plist-get opts :suffix))
+         (prefix (plist-get opts :prefix)))
+    (unless (and (eq (car-safe other) 'table) on
+                 (or (keywordp on) (and (consp on) (= (length on) 2) (cl-every #'keywordp on))))
+      (signal 'qss-spec-test-no-nu (list args)))
+    (concat "join"
+            (if (memq kind '(:left left)) " --left" "")
+            (if suffix (format " --suffix %s" (qss-nuon--string suffix)) "")
+            (if prefix (format " --prefix %s" (qss-nuon--string prefix)) "")
+            (format " $%s " (qss-spec-test--nu-name (cadr other)))
+            (if (keywordp on)
+                (qss-spec-test--nu-name on)
+              (format "%s %s" (qss-spec-test--nu-name (car on)) (qss-spec-test--nu-name (cadr on)))))))
+
+(defun qss-spec-test--nu-stage (stage)
+  "Return STAGE as a Nushell command."
+  (let* ((stage (if (consp stage) stage (list stage)))
+         (args (cdr stage))
+         (names (lambda () (mapconcat #'qss-spec-test--nu-name args " "))))
+    (pcase (car stage)
+      ((or 'where 'filter) (format "where {|r| %s}" (qss-spec-test--nu-condition (car args))))
+      ('select (concat "select " (funcall names)))
+      ('reject (concat "reject " (funcall names)))
+      ('get (concat "get " (funcall names)))
+      ('sort-by
+       ;; one sort per column, the last first: Nushell sorts stably
+       (mapconcat (lambda (k) (format "sort-by %s%s" (qss-spec-test--nu-name (car k)) (if (cdr k) " -r" "")))
+                  (reverse (mapcar (lambda (k) (cons (intern (format ":%s" (car k))) (cdr k)))
+                                   (qss--sort-keys args)))
+                  " | "))
+      ((and w (or 'first 'last)) (if args (format "%s %d" w (car args)) (symbol-name w)))
+      ((or 'count 'length) "length")
+      ('columns "columns")
+      ('join (qss-spec-test--nu-join args))
+      ('group-by (concat "group-by " (funcall names) " --to-table"))
+      (_ (signal 'qss-spec-test-no-nu (list stage))))))
+
+(defun qss-spec-test--nu-script (case tables)
+  "Return the Nushell script of CASE over TABLES."
+  (let ((p (cddr case)))
+    (concat
+     (mapconcat (lambda (tab)
+                  (format "let %s = %s\n" (qss-spec-test--nu-name (car tab))
+                          (qss-nuon-encode (cadr tab))))
+                tables "")
+     (mapconcat #'identity
+                (append (list (concat "$" (qss-spec-test--nu-name (plist-get p :from))))
+                        (mapcar #'qss-spec-test--nu-stage (plist-get p :stages))
+                        (list "to nuon"))
+                " | "))))
+
+(defun qss-spec-test--from-nu (v)
+  "Return the NUON value V as the cases write results: records as plists."
+  (cond ((eq v :null) nil)
+        ((and (consp v) (consp (car v)) (symbolp (caar v)) (not (keywordp (caar v))))
+         ;; a record: an alist
+         (cl-mapcan (lambda (cell) (list (intern (format ":%s" (car cell)))
+                                         (qss-spec-test--from-nu (cdr cell))))
+                    v))
+        ((listp v) (mapcar #'qss-spec-test--from-nu v))
+        (t v)))
+
+(defun qss-spec-test--run-nu (case tables)
+  "Run CASE in Nushell.  Return (STATUS . MESSAGE): STATUS is ok, fail or no-nu."
+  (let* ((p (cddr case))
+         (script (condition-case nil (qss-spec-test--nu-script case tables)
+                   ((qss-spec-test-no-nu user-error) nil))))
+    (if (not script)
+        (cons 'no-nu "no Nushell form")
+      (with-temp-buffer
+        (let* ((code (call-process "nu" nil t nil "-c" script))
+               (out (string-trim (buffer-string)))
+               (got (and (zerop code) (qss-spec-test--from-nu (qss-nuon-read out))))
+               (columns (eq (qss-spec-test--word (car (last (plist-get p :stages)))) 'columns))
+               (got (if columns (mapcar (lambda (c) (intern (format ":%s" c))) got) got))
+               (expected (cond ((plist-member p :rows) (plist-get p :rows))
+                               ((plist-member p :values) (plist-get p :values))
+                               (t (plist-get p :value)))))
+          (cond ((plist-get p :error)
+                 (if (zerop code) (cons 'fail (format "expected an error, got %S" got)) (cons 'ok nil)))
+                ((not (zerop code)) (cons 'fail (format "nu failed: %s" out)))
+                ((qss-spec-test--same-p expected got) (cons 'ok nil))
+                (t (cons 'fail (format "expected %S\n      got %S" expected got)))))))))
+
+(defun qss-spec-test-nushell-report (&optional only)
+  "Run the shared cases in Nushell (with ONLY: names containing it).
+Return a list of (NAME VERDICT MESSAGE); VERDICT is one of
+  agrees        no note, same result
+  disagrees     no note, other result (a finding)
+  differs       noted :differs, other result (as noted)
+  note-stale    noted :differs, but the same result now
+  skipped       noted :skip
+  cannot        no Nushell form for it (and no note)"
+  (pcase-let ((`(,tables . ,cases) (qss-spec-test--cases))
+              (report nil))
+    (dolist (c cases)
+      (when (or (null only) (string-search only (cadr c)))
+        (let* ((note (plist-get (cddr c) :nushell))
+               (r (and (not (eq (car note) :skip)) (qss-spec-test--run-nu c tables)))
+               (verdict (cond ((eq (car note) :skip) 'skipped)
+                              ((eq (car r) 'no-nu) (if note 'differs 'cannot))
+                              ((eq (car note) :differs) (if (eq (car r) 'ok) 'note-stale 'differs))
+                              ((eq (car r) 'ok) 'agrees)
+                              (t 'disagrees))))
+          (push (list (cadr c) verdict (cdr r)) report))))
+    (nreverse report)))
+
+(ert-deftest qss-spec-nushell ()
+  "The shared cases in Nushell: the same results, or a note says why not."
+  (skip-unless (executable-find "nu"))
+  (let ((bad (seq-filter (lambda (r) (memq (nth 1 r) '(disagrees note-stale cannot)))
+                         (qss-spec-test-nushell-report))))
+    (should (equal "" (mapconcat (lambda (r) (format "%s: %s %s" (nth 0 r) (nth 1 r) (or (nth 2 r) "")))
+                                 bad "\n")))))
+
 (provide 'qss-spec-test)
 ;;; qss-spec-test.el ends here

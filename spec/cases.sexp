@@ -1,8 +1,8 @@
 ;;;; cases.sexp -- what the words of vocabulary.sexp do, with data
 ;;;;
 ;;;; Every case runs in Common Lisp and Emacs Lisp, each in memory and in
-;;;; SQLite (the tables written to a fresh database), later also in Nushell.
-;;;; All runs must give the expected result. The same file lives in
+;;;; SQLite (the tables written to a fresh database), and in Nushell (0.116.1)
+;;;; when nu is installed. All runs must give the expected result. The same file lives in
 ;;;; qss-query/spec/ and qss/spec/; change both.
 ;;;;
 ;;;; (:case NAME :from TABLE :stages (STAGE ...) EXPECTED [:nushell NOTE])
@@ -11,9 +11,10 @@
 ;;;;             table :cities, in memory or in the same database
 ;;;;   EXPECTED  :rows (plist ...)   rows, in this order, columns in this order
 ;;;;             :values (v ...)     after get
-;;;;             :value v            after count or columns
+;;;;             :value v            after count, columns, or first/last without n
 ;;;;             :error t            the pipe signals an error
-;;;;   NOTE      (:differs "why") or (:skip "why"): Nushell does it otherwise
+;;;;   NOTE      (:differs "why"): Nushell gives another result (as noted);
+;;;;             (:skip "why"): not run in Nushell (a word Nushell does not have)
 ;;;; Values compare by value for numbers (10 = 10.0), else with EQUAL.
 
 (:cases 1
@@ -29,7 +30,10 @@
    ((:city "Bruchsal"    :zip "76646" :name "Stadt Bruchsal")
     (:city "Heidelsheim" :zip "76646" :name "Heidelsheim (Bruchsal)")
     (:city "Karlsruhe"   :zip "76131" :name "Stadt Karlsruhe")
-    (:city "Mannheim"    :zip "68159" :name "Stadt Mannheim"))))
+    (:city "Mannheim"    :zip "68159" :name "Stadt Mannheim")))
+  (:tags
+   ((:place nil        :tag "none")
+    (:place "Bruchsal" :tag "home"))))
 
  ;; ------------------------------------------------------------------
  ;; where, filter: conditions and NULL
@@ -46,9 +50,21 @@
  (:case "filter is where" :from :people
   :stages ((filter (= :city "Bruchsal")) (sort-by :nr) (select :nr))
   :rows ((:nr 1) (:nr 4)))
- (:case "not of unknown stays out" :from :people
+ (:case "not: NULL is not equal to a value" :from :people
   :stages ((where (not (= :city "Bruchsal"))) (sort-by :nr) (get :nr))
-  :values (3 5))
+  :values (2 3 5))
+ (:case "= nil finds NULL" :from :people
+  :stages ((where (= :city nil)) (get :nr))
+  :values (2))
+ (:case "/= nil finds the others" :from :people
+  :stages ((where (/= :city nil)) (sort-by :nr) (get :nr))
+  :values (1 3 4 5))
+ (:case "in: NULL is in no list without nil" :from :people
+  :stages ((where (not (in :city '("Bruchsal")))) (sort-by :nr) (get :nr))
+  :values (2 3 5))
+ (:case "in: a list with nil finds NULL" :from :people
+  :stages ((where (in :city '(nil "Karlsruhe"))) (sort-by :nr) (get :nr))
+  :values (2 5))
  (:case "is-null" :from :people
   :stages ((where (is-null :city)) (get :nr))
   :values (2))
@@ -60,10 +76,12 @@
   :values (2 4))
  (:case "or with unknown" :from :people
   :stages ((where (or (> :age 40) (< :score 3))) (sort-by :nr) (get :nr))
-  :values (1 2 4))
+  :values (1 2 4)
+  :nushell (:differs "Nushell: null > x gives nothing, and or refuses it (an error)"))
  (:case "and with unknown" :from :people
   :stages ((where (and (> :age 30) (> :score 1))) (sort-by :nr) (get :nr))
-  :values (1 4))
+  :values (1 4)
+  :nushell (:differs "Nushell: null > x gives nothing, and and refuses it (an error)"))
  (:case "numbers by value" :from :people
   :stages ((where (= :score 10)) (get :nr))
   :values (4))
@@ -86,10 +104,6 @@
   :stages ((where (like :name "_nna")) (get :nr))
   :values (1)
   :nushell (:skip "like in Nushell is a regular expression"))
- (:case "nil as a value" :from :people
-  :stages ((where (= :city nil)))
-  :error t
-  :nushell (:differs "Nushell compares with null"))
 
  ;; ------------------------------------------------------------------
  ;; select, reject, get
@@ -113,21 +127,25 @@
  (:case "sort-by, NULL last" :from :people
   :stages ((sort-by :age :nr) (get :nr))
   :values (3 1 2 4 5))
- (:case "sort-by :desc, NULL last" :from :people
+ (:case "sort-by :desc reverses the order: NULL first" :from :people
   :stages ((sort-by :age :desc :nr) (get :nr))
-  :values (2 4 1 3 5))
+  :values (5 4 2 1 3))
  (:case "sort-by text, by code points" :from :people
   :stages ((sort-by :name) (get :nr))
   :values (1 3 2 5 4))
  (:case "sort-by text :desc" :from :people
   :stages ((sort-by :name :desc) (get :nr))
-  :values (5 2 3 1 4))
+  :values (4 5 2 3 1))
+ (:case "sort-by :desc reverses ties too" :from :people
+  :stages ((sort-by :city :desc) (get :nr))
+  :values (2 5 3 4 1))
  (:case "sort-by is stable: an earlier sort breaks ties" :from :people
   :stages ((sort-by :nr :desc) (sort-by :age) (get :nr))
   :values (3 1 4 2 5))
  (:case "sort-by direction without column" :from :people
   :stages ((sort-by :desc))
-  :error t)
+  :error t
+  :nushell (:skip "an error before anything runs"))
 
  ;; ------------------------------------------------------------------
  ;; first, last
@@ -135,10 +153,15 @@
  (:case "first n" :from :people
   :stages ((sort-by :nr) (first 2) (get :nr))
   :values (1 2))
- (:case "first alone is one row" :from :people
+ (:case "first alone is the row itself" :from :people
   :stages ((sort-by :nr) (first) (get :nr))
-  :values (1)
-  :nushell (:differs "first without n gives the record, not a table"))
+  :value 1)
+ (:case "last alone is the row itself" :from :people
+  :stages ((sort-by :nr) (last))
+  :value (:nr 5 :name "Ärger" :city "Karlsruhe" :age nil :score 3))
+ (:case "first of no rows is nil" :from :people
+  :stages ((where (= :nr 99)) (first))
+  :value nil)
  (:case "head: 10 by default" :from :people
   :stages ((sort-by :nr) (head) (get :nr))
   :values (1 2 3 4 5)
@@ -174,32 +197,51 @@
   :value (:nr :name :city :age :score))
 
  ;; ------------------------------------------------------------------
- ;; group-by, summarize: groups sorted by their columns, NULL last
+ ;; group-by as in Nushell (group-by --to-table): the key and the rows of
+ ;; each group, in the order the keys first appear
 
- (:case "group-by: count per group" :from :people
-  :stages ((group-by :city) (get :count))
-  :values (2 1 1 1)
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
- (:case "group-by: the group columns" :from :people
+ (:case "group-by: the keys, NULL too, as they first appear" :from :people
   :stages ((group-by :city) (get :city))
+  :values ("Bruchsal" nil "Heidelsheim" "Karlsruhe"))
+ (:case "group-by: the columns" :from :people
+  :stages ((group-by :city) (columns))
+  :value (:city :items))
+ (:case "group-by: the rows of a group" :from :people
+  :stages ((group-by :city) (first) (get :items))
+  :value ((:nr 1 :name "Anna" :city "Bruchsal" :age 34 :score 2.5)
+          (:nr 4 :name nil :city "Bruchsal" :age 41 :score 10.0)))
+ (:case "group-by keeps the type of the key" :from :people
+  :stages ((group-by :age) (get :age))
+  :values (34 41 29 nil)
+  :nushell (:differs "Nushell turns the keys into text: \"34\""))
+
+ ;; group-sum, summarize: one row per group with :count and aggregates, as
+ ;; in SQL; groups sorted by their columns, NULL last
+
+ (:case "group-sum: count per group" :from :people
+  :stages ((group-sum :city) (get :count))
+  :values (2 1 1 1)
+  :nushell (:skip "group-sum is not in Nushell"))
+ (:case "group-sum: the group columns" :from :people
+  :stages ((group-sum :city) (get :city))
   :values ("Bruchsal" "Heidelsheim" "Karlsruhe" nil)
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
- (:case "group-by: sum leaves NULL out" :from :people
-  :stages ((group-by :city (sum :score)) (get :sum-score))
+  :nushell (:skip "group-sum is not in Nushell"))
+ (:case "group-sum: sum leaves NULL out" :from :people
+  :stages ((group-sum :city (sum :score)) (get :sum-score))
   :values (12.5 7 3 nil)
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
- (:case "group-by: aggregate named with :as" :from :people
-  :stages ((group-by :city (max :age :as :oldest)) (get :oldest))
+  :nushell (:skip "group-sum is not in Nushell"))
+ (:case "group-sum: aggregate named with :as" :from :people
+  :stages ((group-sum :city (max :age :as :oldest)) (get :oldest))
   :values (41 29 nil 41)
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
- (:case "group-by: where on the groups" :from :people
-  :stages ((group-by :city) (where (> :count 1)) (get :city))
+  :nushell (:skip "group-sum is not in Nushell"))
+ (:case "group-sum: where on the groups" :from :people
+  :stages ((group-sum :city) (where (> :count 1)) (get :city))
   :values ("Bruchsal")
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
- (:case "group-by: two columns" :from :people
-  :stages ((group-by :city :age) (get :count))
+  :nushell (:skip "group-sum is not in Nushell"))
+ (:case "group-sum: two columns" :from :people
+  :stages ((group-sum :city :age) (get :count))
   :values (1 1 1 1 1)
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
+  :nushell (:skip "group-sum is not in Nushell"))
  (:case "summarize" :from :people
   :stages ((summarize (avg :age)) (get :avg-age))
   :values (36.25)
@@ -216,17 +258,18 @@
   :stages ((where (= :nr 99)) (summarize (sum :score)) (get :count))
   :values (0)
   :nushell (:skip "Nushell has no summarize"))
- (:case "group-by without a column" :from :people
-  :stages ((group-by (sum :score)))
+ (:case "group-sum without a column" :from :people
+  :stages ((group-sum (sum :score)))
   :error t
-  :nushell (:differs "group-by in Nushell gives a record of groups, not rows"))
+  :nushell (:skip "group-sum is not in Nushell"))
 
  ;; ------------------------------------------------------------------
  ;; join
 
  (:case "join on all common columns" :from :people
   :stages ((join (table :cities)) (count))
-  :value 0)
+  :value 0
+  :nushell (:skip "join in Nushell needs a column"))
  (:case "join :on a column" :from :people
   :stages ((join (table :cities) :on :city) (sort-by :nr) (select :nr :zip))
   :rows ((:nr 1 :zip "76646") (:nr 3 :zip "76646") (:nr 4 :zip "76646") (:nr 5 :zip "76131")))
@@ -240,13 +283,24 @@
  (:case "left join: rows without partner" :from :people
   :stages ((join (table :cities) :on :city :kind :left) (where (is-null :zip)) (get :nr))
   :values (2))
- (:case "join: a name in both tables is ambiguous" :from :people
-  :stages ((join (table :cities) :on :city) (select :nr :name))
-  :error t)
- (:case "join: all columns with an ambiguous name" :from :people
-  :stages ((join (table :cities) :on :city))
-  :error t
-  :nushell (:differs "Nushell renames the right columns with _"))
+ (:case "join: a name both tables have gets _ on the right" :from :people
+  :stages ((join (table :cities) :on :city) (sort-by :nr) (select :nr :name :name_))
+  :rows ((:nr 1 :name "Anna" :name_ "Stadt Bruchsal")
+         (:nr 3 :name "Carla" :name_ "Heidelsheim (Bruchsal)")
+         (:nr 4 :name nil :name_ "Stadt Bruchsal")
+         (:nr 5 :name "Ärger" :name_ "Stadt Karlsruhe")))
+ (:case "join: the columns" :from :people
+  :stages ((join (table :cities) :on :city) (columns))
+  :value (:nr :name :city :age :score :zip :name_))
+ (:case "join: NULL matches NULL" :from :people
+  :stages ((join (table :tags) :on (:city :place)) (sort-by :nr) (get :nr))
+  :values (1 2 4))
+ (:case "join: the right join column stays" :from :people
+  :stages ((join (table :tags) :on (:city :place)) (columns))
+  :value (:nr :name :city :age :score :place :tag))
+ (:case "join :suffix renames the right join column too" :from :people
+  :stages ((join (table :tags) :on (:city :place) :suffix "-t") (columns))
+  :value (:nr :name :city :age :score :place-t :tag-t))
  (:case "join :suffix" :from :people
   :stages ((join (table :cities) :on :city :suffix "-c") (sort-by :nr)
            (select :nr :name :name-c :zip-c))

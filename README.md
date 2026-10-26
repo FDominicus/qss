@@ -63,7 +63,7 @@ changes a cell, `d` marks a row for deletion, `C-c C-c` writes (see
   `(where (/= ...))`, `(where (> :amount 120.0))` for numbers,
   `(where (is-null :city))` for an empty cell, for a time the day:
   `(where (and (>= :modified "2026-10-22") (< :modified "2026-10-23")))`;
-  then `(sort-by COL)`, `(sort-by COL :desc)`, `(group-by COL)`,
+  then `(sort-by COL)`, `(sort-by COL :desc)`, `(group-sum COL)`,
   changing the cell (in an editable SQLite table),
   `(select COL)`, `(reject COL)` and copying the value;
 - copying the whole table as text, Org, Markdown, CSV or TSV.
@@ -190,11 +190,12 @@ else works.
 |---|---|
 | `(where COND)` | rows for which COND holds; `filter` is the same |
 | `(select COL...)` / `(reject COL...)` | keep / drop columns |
-| `(sort-by COL [:desc] ...)` | sort, by several columns if given: `(sort-by age :desc name)`; missing values last |
-| `(first [N])` / `(last [N])` | the first / last N rows (default 1) |
+| `(sort-by COL [:desc] ...)` | sort, stable, by several columns if given: `(sort-by age :desc name)`; missing values last, `:desc` reverses the whole order (missing first), as `sort-by -r` in Nushell |
+| `(first [N])` / `(last [N])` | the first / last N rows; without N the row itself (nil if there is none), as in Nushell |
 | `(head [N])` | the first N rows, default 10 (as in clsh) |
 | `(get COL)` | the values of one column |
-| `(group-by COL... AGG...)` | one row per group: the keys, `count` and aggregates such as `(sum amount)`; `RET` shows the group |
+| `(group-by COL...)` | one row per group: the keys and `items`, the rows of the group, in the order the keys first appear; as `group-by --to-table` in Nushell |
+| `(group-sum COL... AGG...)` | one row per group: the keys, `count` and aggregates such as `(sum amount)`; `RET` shows the group |
 | `(summarize AGG...)` | one row: `count` and the aggregates over all rows |
 | `(join TABLE :on COL)` | rows of both tables whose columns match, side by side; `:kind :left`, `:suffix`, `:prefix` |
 | `(update-rows :COL VALUE ...)` | change the stored rows of an SQLite query (see [Changing rows](#changing-rows)) |
@@ -213,7 +214,7 @@ else works.
 ### Groups and joins
 
 ```
-qss> (sqlite (qss-demo-database) "Orders") (group-by status (sum amount) (max order-date))
+qss> (sqlite (qss-demo-database) "Orders") (group-sum status (sum amount) (max order-date))
 status     count  sum-amount  max-order-date
 cancelled      1       150.0  2026-10-12
 paid           3       245.5  2026-10-02
@@ -230,20 +231,25 @@ and on SQLite alike. A sum or average of sizes is a size again.
 ```
 qss> (sqlite (qss-demo-database) "Orders")
        (join (sqlite (qss-demo-database) "Customers") :on customer-no)
-       (group-by city (sum amount))
+       (group-sum city (sum amount))
 ```
 
 `join` takes the other table as a source like any other, and options:
 `:on COL` (the same name on both sides), `:on (LEFT RIGHT)` (different
 names), `:on ((L1 R1) (L2 R2))`; without `:on`, all columns both have.
 `:kind :left` keeps the rows without a partner. A column both sides have
-appears once if it is joined on. Any other name both sides have is
-ambiguous: the left column stays, but using the name (or showing all
-columns) is an error. `:suffix "-c"` or `:prefix "c-"` renames the
-columns of the other table (except the join columns), as Nushell's
-`join --suffix` does; or select only what you need first:
+appears once if it is joined on. Any other name both sides have gets
+`_` on the right side (`name_`, `name__` if that is taken too), as in
+Nushell. `:suffix "-c"` or `:prefix "c-"` renames every column of the
+other table except a join column both have, so the right key of
+`:on (LEFT RIGHT)` is renamed too — as Nushell's `join --suffix`; or
+select only what you need first:
 `(join (qss-> (sqlite f "Customers") (select customer-no name)) :on customer-no)`.
-Missing values never match. The rows of a join are data.
+As in Nushell, a missing value matches a missing value. The rows of a
+join are data.
+
+`group-by` keeps the rows of each group; `group-sum` counts and sums
+them. Missing keys form a group of their own in both.
 
 `(to text)`, `(to org)` and `(to md)` are aligned and show the cells as
 the table does (`9.8k`, `2026-10-22 14:40`); `(to csv)` and `(to tsv)`
@@ -275,9 +281,12 @@ strings and times (`(> :modified "2026-10-20")` works), sizes and
 durations can be written as in Nushell (`(> :size "10kb")`,
 `(< :took "1hr")`), `like` ignores the case of ASCII letters (as SQLite:
 `"b%"` finds `Bert`, `"ä%"` does not find `Ärger`), and a missing value is
-NULL — comparing with it is unknown, so the same condition returns the
-same rows in memory and in SQLite. `nil` as a value is an error; ask
-for NULL with `is-null`.
+NULL. As in Nushell, `=` and `/=` treat NULL as a value: `(= :city nil)`
+finds the empty cells, `(/= :city "Bruchsal")` keeps them; `in` finds
+NULL only if the list has `nil`. `<`, `>`, `<=`, `>=` and `like` with
+NULL are unknown, so the row is left out. On SQLite this is `IS`,
+`IS NOT` and an explicit test in `IN`, so the same condition returns the
+same rows in memory and in SQLite. `is-null` still works.
 
 If `it` occurs, the condition is ordinary Lisp with `it` bound to the row:
 
@@ -293,9 +302,13 @@ follow Nushell. Two files of S-expressions decide what a word means:
 meaning, the Nushell command and the function on each side;
 `spec/cases.sexp` shows each word on two small tables, with the
 expected result. Both implementations run every case in memory and on
-SQLite (`qss-spec-test.el` here), so the four runs must agree. Where
-Nushell does a thing differently, the case says so. To change what a
-word means, change the case first.
+SQLite (`qss-spec-test.el` here), so the four runs must agree. When `nu`
+is installed, every case runs in Nushell too (`qss-spec-nushell`, checked
+with 0.116.1): it must give the same result, or the case says why not.
+Where Nushell stops with an error (`not`, `and`, `or` over a missing
+value), qss goes on, and `group-by` keeps the type of a key where
+Nushell turns it into text; the cases mark these with `:differs`. To
+change what a word means, change the case first.
 
 ### SQLite
 
@@ -309,10 +322,10 @@ qss> (tables (qss-demo-database))
 
 On an SQLite source the pipe stays a query until the rows are needed.
 `where`, `sort-by`, `first`, `count`, `select`, `reject`, `columns`,
-`group-by`, `summarize` and `join` (with a query of the same file)
+`group-sum`, `summarize` and `join` (with a query of the same file)
 become SQL with `?` parameters; a word that cannot (a condition with
 `it`, `each`, `last`, `get`) fetches the rows and goes on in memory.
-After `group-by`, `where` works on the aggregates and is SQL too (what
+After `group-sum`, `where` works on the aggregates and is SQL too (what
 SQL calls HAVING); `RET` on a group fetches its rows with a query of its
 own.
 
@@ -321,7 +334,7 @@ qss> (sqlite (qss-demo-database) "Orders") (where (> :amount 100)) (sort-by orde
 SELECT *
 FROM "Orders"
 WHERE ("Amount" > ?)
-ORDER BY "OrderDate" IS NULL, "OrderDate" DESC
+ORDER BY "OrderDate" IS NULL DESC, "OrderDate" DESC, rowid DESC
 LIMIT ?
 Parameters: (100 20)
 ```
@@ -833,7 +846,7 @@ docstring, uses, files); `categories` the categories.
 
 ```elisp
 (qss-display-> (xref "occurrences") (where (= :context "macro-use"))
-               (group-by :value) (sort-by :count :desc) (first 20))
+               (group-sum :value) (sort-by :count :desc) (first 20))
 ```
 
 `qss-elisp-xref-queries.el` has fifteen questions, one form each, to
@@ -918,9 +931,9 @@ Little in qss is new; it puts old ideas together in Emacs.
 - **dbplyr** (R) — a pipe over a database table stays a query and is
   translated to SQL only when the rows are needed; the same words work
   in memory and in the database. <https://dbplyr.tidyverse.org/>
-- **SQL** — the meaning of the comparisons: `like`, `in`, and NULL as
-  unknown (three-valued logic), so that a condition returns the same
-  rows in memory and in SQLite.
+- **SQL** — the meaning of `like` and of `<`, `>` with NULL as unknown
+  (three-valued logic), so that a condition returns the same rows in
+  memory and in SQLite; `=` with NULL follows Nushell (SQL's `IS`).
 - **SQLite** — one file as the store of everything, source and target
   alike (`sqlite`, `into`).
 - **CLIM** (Common Lisp Interface Manager), and Dynamic Windows of the

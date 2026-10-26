@@ -67,18 +67,18 @@
 ;;; Which functions show the most texts, over everything
 
 (qss-display-> (xref "occurrences") (where (= :context "string"))
-               (group-by :parent-head) (sort-by :count :desc) (first 20))
+               (group-sum :parent-head) (sort-by :count :desc) (first 20))
 
 ;;; The macros used most
 
 (qss-display-> (xref "occurrences") (where (= :context "macro-use"))
-               (group-by :value) (sort-by :count :desc) (first 20))
+               (group-sum :value) (sort-by :count :desc) (first 20))
 
 ;;; Who still uses what became obsolete (here: defadvice, when-let)
 
 (qss-display-> (xref "occurrences") (where (in :value '("defadvice" "when-let" "if-let")))
                (join (xref "files") :on (:file-id :id))
-               (group-by :origin :package :value) (sort-by :count :desc))
+               (group-sum :origin :package :value) (sort-by :count :desc))
 
 ;;; What there is for strings, the most used first (as M-x qss-xref-category)
 
@@ -110,8 +110,8 @@
 
 ;;; What there is: kinds of definitions, files by origin (emacs, elpa, user)
 
-(qss-display-> (xref "definitions") (group-by :kind) (sort-by :count :desc))
-(qss-display-> (xref "files") (group-by :origin :package) (sort-by :count :desc))
+(qss-display-> (xref "definitions") (group-sum :kind) (sort-by :count :desc))
+(qss-display-> (xref "files") (group-sum :origin :package) (sort-by :count :desc))
 
 ;;; Files that could not be read or compiled
 
