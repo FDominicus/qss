@@ -60,7 +60,9 @@
   (let* ((source (lambda (name)
                    (pcase mode
                      ('memory `',(cadr (assq name tables)))
-                     ('sqlite `(qss-sqlite ,file ,(substring (symbol-name name) 1))))))
+                     ('sqlite `(qss-sqlite ,file ,(substring (symbol-name name) 1)))
+                     ;; FILE is the DSN; the tables are named qss_spec_NAME
+                     ('odbc `(qss-odbc-source ,file ,(qss-spec-test--odbc-name name))))))
          (stages (qss-spec-test--replace-tables stages source))
          (word (and stages (qss-spec-test--word (car (last stages)))))
          (pipe `(qss-> ,(funcall source from) ,@stages)))
@@ -94,6 +96,52 @@
           (err (format "error: %s" (error-message-string err)))
           ((not (qss-spec-test--same-p expected got))
            (format "expected %S\n      got %S" expected got)))))
+
+(defun qss-spec-test--odbc-name (key)
+  "The name of the table KEY (:people) in an ODBC test database."
+  (concat "qss_spec_" (substring (symbol-name key) 1)))
+
+(defun qss-spec-test-odbc-failures (dsn &optional only)
+  "Run the shared cases against the ODBC data source DSN.
+The tables are written as qss_spec_people ... and dropped afterwards.
+Return a list of (NAME odbc MESSAGE)."
+  (pcase-let* ((`(,tables . ,cases) (qss-spec-test--cases))
+               (db (qss-sql-odbc-database dsn))
+               (con (qss-sql-odbc-connection db))
+               (failures nil))
+    (unwind-protect
+        (progn
+          (dolist (tab tables)
+            (qss-sql-odbc-write (qss-as-table (cadr tab)) db
+                                (qss-spec-test--odbc-name (car tab)) 'replace))
+          (dolist (c cases)
+            (when (or (null only) (string-search only (cadr c)))
+              (let ((msg (qss-spec-test--run c 'odbc tables dsn)))
+                (when msg (push (list (cadr c) 'odbc msg) failures))))))
+      (dolist (tab tables)
+        (qss-odbc-execute con (format "DROP TABLE IF EXISTS %s"
+                                      (qss-sql-quote (qss-spec-test--odbc-name (car tab))))))
+      (qss-odbc-execute con (format "DELETE FROM %s WHERE \"table\" LIKE 'qss_spec_%%'"
+                                    (qss-sql-quote qss-sql--types-table)))
+      (qss-odbc-refresh dsn))
+    (nreverse failures)))
+
+(ert-deftest qss-spec-cases-odbc ()
+  "The shared cases against each DSN of QSS_ODBC_DSNS (default \"test\")."
+  (skip-unless (qss-odbc-available-p))
+  (let ((ran nil))
+    (dolist (dsn (split-string (or (getenv "QSS_ODBC_DSNS") "test")))
+      (when (condition-case err (qss-sql-odbc-database dsn)
+              (error (message "qss-spec-cases-odbc: %s unreachable: %s"
+                              dsn (error-message-string err))
+                     nil))
+        (setq ran t)
+        (ert-info ((format "DSN %s" dsn))
+          (let ((failures (qss-spec-test-odbc-failures dsn)))
+            (should (equal "" (mapconcat (lambda (f) (format "%s: %s" (nth 0 f) (nth 2 f)))
+                                         failures "\n")))))))
+    (unless ran (message "qss-spec-cases-odbc: skipped, no DSN reachable"))
+    (skip-unless ran)))
 
 (defun qss-spec-test-failures (&optional only)
   "Run the shared cases (with ONLY: those whose name contains it).

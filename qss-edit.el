@@ -53,7 +53,7 @@
 
 (defun qss-edit--check-relation (rel what)
   "Signal an error unless the rows of REL can be changed; WHAT is the word."
-  (unless (qss-relation-p rel)
+  (unless (and (qss-relation-p rel) (stringp (qss-relation-file rel)))
     (user-error "%s works on SQLite tables only" what))
   (unless (qss-sql--direct-p rel)
     (user-error "%s: this query is not straight on a table (a join, a group or after first)" what))

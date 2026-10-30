@@ -157,6 +157,100 @@ Not shown by `tables'.")
     (unless (file-exists-p f) (user-error "No database: %s" f))
     f))
 
+;;; ------------------------------------------------------------------
+;;; The database behind a query
+;;
+;; A query (`qss-relation') keeps its database in the slot FILE: a file
+;; name means SQLite, as always.  Other databases (qss-sql-odbc.el) add
+;; methods for these generic functions.  For a file name they do what
+;; this file did before, and the SQL text stays the same.
+
+(cl-defgeneric qss-sql-db-select (db sql params)
+  "Run the query SQL with PARAMS (a list) in DB; return the rows as lists.")
+
+(cl-defgeneric qss-sql-db-schema (db)
+  "Return the tables of DB: a list of (NAME . COLUMNS) as `qss-sql-schema'.")
+
+(cl-defgeneric qss-sql-db-label (db)
+  "Return DB as a short name for titles and messages.")
+
+(cl-defgeneric qss-sql-db-order-id (db table)
+  "Return the SQL for the order in which TABLE of DB has its rows, or nil.
+SQLite: rowid, for a table (not a view).  It breaks the last ties of
+sort-by, as the input order does in memory.")
+
+(cl-defgeneric qss-sql-db-dialect (db)
+  "Return the SQL dialect of DB, a property list.
+:true :false   conditions that are always true or false
+:is :is-not    = and /= that treat NULL as a value
+:null-last     format for ORDER BY ascending with NULL last (column twice)
+:null-first-desc  the same descending, NULL first
+:like          format for (LEFT LIKE PATTERN), case folded in ASCII only
+:binary-text   format that makes a text column compare by code points,
+               as SQLite and memory do, or nil if it does already")
+
+(cl-defgeneric qss-sql-db-value (db value)
+  "Return the Lisp VALUE as a parameter for DB.")
+
+(cl-defgeneric qss-sql-db-rows (db rel run keys)
+  "Return the rows of the query RUN (made from REL) in DB as property lists.
+KEYS are the keywords of the columns of REL.")
+
+(defconst qss-sql--sqlite-dialect
+  '(:true "1" :false "0" :is "IS" :is-not "IS NOT"
+    :null-last "%s IS NULL, %s" :null-first-desc "%s IS NULL DESC, %s DESC"
+    :like "(%s LIKE %s)")
+  "The dialect of SQLite: LIKE folds ASCII only, IS compares NULL.")
+
+(cl-defmethod qss-sql-db-dialect ((_db string))
+  "SQLite."
+  qss-sql--sqlite-dialect)
+
+(cl-defmethod qss-sql-db-select ((db string) sql params)
+  "SQLite: the file DB."
+  (qss-sql--with-db d db
+    (sqlite-select d sql (vconcat params))))
+
+(cl-defmethod qss-sql-db-schema ((db string))
+  "SQLite: the file DB."
+  (qss-sql-schema db))
+
+(cl-defmethod qss-sql-db-label ((db string))
+  "SQLite: the file name without directory."
+  (file-name-nondirectory db))
+
+(cl-defmethod qss-sql-db-order-id ((db string) table)
+  "SQLite: rowid of a real table."
+  (qss-sql--with-db d db
+    (and (equal (caar (sqlite-select d "SELECT type FROM sqlite_master WHERE name = ? COLLATE NOCASE"
+                                     (vector table)))
+                "table")
+         "rowid")))
+
+(cl-defmethod qss-sql-db-value ((_db string) value)
+  "SQLite: times as text, t as 1, symbols by name."
+  (qss-sql--value value))
+
+(defun qss-sql--dialect (rel key)
+  "Return KEY of the dialect of the database of REL."
+  (plist-get (qss-sql-db-dialect (qss-relation-file rel)) key))
+
+(defun qss-sql--text-column-p (type)
+  "Return non-nil if the declared column TYPE holds text."
+  (and type (eq (qss-sql--affinity type) 'text)))
+
+(defun qss-sql--binary (rel sql type)
+  "SQL of a column of TYPE in REL, made to compare by code points.
+The database may sort text by a language (PostgreSQL with de_DE puts
+\"Ärger\" after \"Anna\" and \"bert\" before \"Carla\"); memory and
+SQLite compare code points."
+  (let ((fmt (qss-sql--dialect rel :binary-text)))
+    (if (and fmt (qss-sql--text-column-p type)) (format fmt sql) sql)))
+
+(defun qss-sql--same-db-p (a b)
+  "Return non-nil if A and B are the same database."
+  (if (and (stringp a) (stringp b)) (equal a b) (eq a b)))
+
 (defun qss-sql-schema (file)
   "Return the tables of FILE with their columns, cached per modification time."
   (let* ((file (qss-sql--file file))
@@ -206,15 +300,16 @@ TABLE is in lower case: SQLite does not distinguish case in names."
         (push c seen)))))
 
 (defun qss-sql--find-table (file name)
-  "Return table NAME (database name, symbol or keyword) of FILE."
-  (let* ((tables (qss-sql-schema file))
+  "Return table NAME (database name, symbol or keyword) of FILE.
+FILE is a database: an SQLite file, or another one (`qss-sql-db-schema')."
+  (let* ((tables (qss-sql-db-schema file))
          (key (and (not (stringp name)) (qss--name name))))
     (or (if key
             (cl-find key tables :key (lambda (tab) (qss-sql-name-key (car tab))))
           (or (assoc name tables)
               (cl-find name tables :key #'car :test #'string-equal-ignore-case)))
         (user-error "%s has no table %s; tables: %s"
-                    (abbreviate-file-name file) name
+                    (if (stringp file) (abbreviate-file-name file) (qss-sql-db-label file)) name
                     (mapconcat #'car tables " ")))))
 
 ;;; ------------------------------------------------------------------
@@ -242,10 +337,14 @@ With one argument, FILE is the name of a table in `qss-database'."
       (user-error "%s looks like a file: give the table too, or use (tables %S)" file file))
     (setq table file
           file (qss-database-file)))
-  (let* ((file (qss-sql--file file))
-         (tab (qss-sql--find-table file table)))
-    (qss-relation--make :file file :table (car tab) :columns (cdr tab)
-                        :title (format "%s %s" (file-name-nondirectory file) (car tab)))))
+  (qss-sql-relation (qss-sql--file file) table))
+
+(defun qss-sql-relation (db table)
+  "Return the table TABLE of the database DB as a query.
+DB is an SQLite file name or another database (see qss-sql-odbc.el)."
+  (let ((tab (qss-sql--find-table db table)))
+    (qss-relation--make :file db :table (car tab) :columns (cdr tab)
+                        :title (format "%s %s" (qss-sql-db-label db) (car tab)))))
 
 (defun qss-sql--copy (rel stage &rest changes)
   "Copy REL with the title extended by STAGE and some slots set.
@@ -286,9 +385,10 @@ The slots to set are in CHANGES, a property list of slot keywords and values."
 
 ;;; Condition -> SQL
 
-(defun qss-sql--param (value params)
-  "Append VALUE to PARAMS and return \"?\"."
-  (nconc params (list (qss-sql--value value)))
+(defun qss-sql--param (value params &optional db)
+  "Append VALUE to PARAMS and return \"?\".
+VALUE becomes a parameter of the database DB (default: SQLite)."
+  (nconc params (list (if db (qss-sql-db-value db value) (qss-sql--value value))))
   "?")
 
 (defun qss-sql--value (v)
@@ -332,7 +432,9 @@ and \"10kb\" in a text column stays text."
 Column names are looked up in REL.  Sizes and durations as text become
 numbers where `qss-sql--quantities-p' says so."
   (let ((params (list nil))               ; head, so that nconc appends
-        (quantities nil))                 ; inside a comparison that converts
+        (quantities nil)                  ; inside a comparison that converts
+        (db (qss-relation-file rel))
+        (dialect (qss-sql-db-dialect (qss-relation-file rel))))
     (cl-labels
         ((value-of (form)
            (let ((v (nth (cadr form) values)))
@@ -353,19 +455,19 @@ numbers where `qss-sql--quantities-p' says so."
             ((keywordp f) (qss-sql--column rel (qss--name f)))
             ((eq (car-safe f) 'qss-param)
              (let ((v (value-of f)))
-               (qss-sql--param v params)))
+               (qss-sql--param v params db)))
             (t
              (pcase (car f)
                ('and (if (cdr f)
                          (concat "(" (mapconcat #'render (cdr f) " AND ") ")")
-                       "1"))
+                       (plist-get dialect :true)))
                ('or (if (cdr f)
                         (concat "(" (mapconcat #'render (cdr f) " OR ") ")")
-                      "0"))
+                      (plist-get dialect :false)))
                ('not (format "(NOT %s)" (render (cadr f))))
                ('is-null (format "(%s IS NULL)" (render (cadr f))))
                ('not-null (format "(%s IS NOT NULL)" (render (cadr f))))
-               ('like (format "(%s LIKE %s)" (render (nth 1 f)) (render (nth 2 f))))
+               ('like (format (plist-get dialect :like) (render (nth 1 f)) (render (nth 2 f))))
                ('in (let ((left (render (nth 1 f)))
                           (list (if (eq (car-safe (nth 2 f)) 'qss-param)
                                     (value-of (nth 2 f))
@@ -374,17 +476,24 @@ numbers where `qss-sql--quantities-p' says so."
                       (let* ((null-in (memq nil list))
                              (vals (remq nil list))
                              (in (and vals (format "%s IN (%s)" left
-                                                   (mapconcat (lambda (v) (qss-sql--param v params))
+                                                   (mapconcat (lambda (v) (qss-sql--param v params db))
                                                               vals ", ")))))
                         (cond ((and null-in in) (format "(%s IS NULL OR %s)" left in))
                               (null-in (format "(%s IS NULL)" left))
                               (in (format "(%s IS NOT NULL AND %s)" left in))
-                              (t "0")))))
+                              (t (plist-get dialect :false))))))
                ;; = and /= treat NULL as a value, as Nushell: IS and IS NOT
                (_ (let ((op (pcase (car f)
-                              ('= "IS") ('/= "IS NOT") ('< "<") ('> ">") ('<= "<=") ('>= ">="))))
+                              ('= (plist-get dialect :is)) ('/= (plist-get dialect :is-not))
+                              ('< "<") ('> ">") ('<= "<=") ('>= ">="))))
                     (unless op (error "Unknown operator in qss-sql: %S" (car f)))
-                    (format "(%s %s %s)" (render (nth 1 f)) op (render (nth 2 f))))))))))
+                    (let ((left (render (nth 1 f))))
+                      ;; < > on text by code points, as in memory
+                      (when (and (memq (car f) '(< > <= >=)) (keywordp (nth 1 f)))
+                        (setq left (qss-sql--binary
+                                    rel left (nth 2 (assq (qss--name (nth 1 f))
+                                                          (qss-relation-columns rel))))))
+                      (format "(%s %s %s)" left op (render (nth 2 f)))))))))))
       (let ((sql (render template)))
         (cons sql (cdr params))))))
 
@@ -400,7 +509,8 @@ SELECT, if given, replaces the list of columns (e.g. \"rowid\")."
                  (qss-sql-quote (qss-relation-table rel))))
          (wheres (qss-relation-wheres rel))
          (order (qss-relation-order rel))
-         (limit (qss-relation-limit rel)))
+         (limit (qss-relation-limit rel))
+         (dialect (qss-sql-db-dialect (qss-relation-file rel))))
     (cons (concat "SELECT "
                   (cond
                    (select select)
@@ -417,9 +527,9 @@ SELECT, if given, replaces the list of columns (e.g. \"rowid\")."
                             (mapconcat (lambda (o)
                                          (let ((c (nth 2 o)))
                                            (cond ((eq (car o) 'qss--rowid)
-                                                  (if (nth 1 o) "rowid DESC" "rowid"))
-                                                 ((nth 1 o) (format "%s IS NULL DESC, %s DESC" c c))
-                                                 (t (format "%s IS NULL, %s" c c)))))
+                                                  (if (nth 1 o) (format "%s DESC" c) c))
+                                                 ((nth 1 o) (format (plist-get dialect :null-first-desc) c c))
+                                                 (t (format (plist-get dialect :null-last) c c)))))
                                        order ", ")))
                   (when limit "\nLIMIT ?"))
           (append (cdr inner)
@@ -454,8 +564,15 @@ Rows straight from a table remember their rowid (`qss-sql-rowid')."
                                    "" :limit limit))
                 rel))
          (keys (mapcar (lambda (c) (intern (format ":%s" (car c))))
-                       (qss-relation-columns rel))))
-    (qss-sql--with-db db (qss-relation-file rel)
+                       (qss-relation-columns rel)))
+         (rows (qss-sql-db-rows (qss-relation-file rel) rel run keys)))
+    (if (qss-relation-row-fn rel)
+        (mapcar (qss-relation-row-fn rel) rows)
+      rows)))
+
+(cl-defmethod qss-sql-db-rows ((file string) rel run keys)
+  "SQLite: rows straight from a table remember their rowid."
+    (qss-sql--with-db db file
       (let* ((with-rowid (and (qss-sql--direct-p run) (qss-sql--real-table-p db rel)))
              (q (qss-sql-query run (and with-rowid
                                         (concat "rowid, "
@@ -474,9 +591,7 @@ Rows straight from a table remember their rowid (`qss-sql-rowid')."
                                (when with-rowid (puthash row (car r) qss-sql--rowids))
                                row))
                            raw)))
-        (if (qss-relation-row-fn rel)
-            (mapcar (qss-relation-row-fn rel) rows)
-          rows)))))
+        rows)))
 
 (defun qss-sql--specs (rel rows)
   "Return the column specs of REL for ROWS.
@@ -551,14 +666,16 @@ rowid breaks the last ties."
          ;; and ORDER BY may still name them
          (new (mapcar (lambda (k)
                         (setq flip (not (eq flip (cdr k))))
-                        (list (car k) flip (qss-sql--column base (car k))))
+                        (list (car k) flip
+                              (qss-sql--binary base (qss-sql--column base (car k))
+                                               (nth 2 (assq (car k) (qss-relation-columns base))))))
                       parsed))
          (old (cl-remove-if (lambda (o) (assq (car o) parsed)) (qss-relation-order base)))
-         (old (if (or (assq 'qss--rowid old) (not (qss-sql--direct-p base))
-                      (not (qss-sql--with-db db (qss-relation-file base)
-                             (qss-sql--real-table-p db base))))
-                  old
-                (append old (list (list 'qss--rowid nil "rowid"))))))
+         (id (and (not (assq 'qss--rowid old)) (qss-sql--direct-p base)
+                  (qss-sql-db-order-id (qss-relation-file base) (qss-relation-table base))))
+         (old (if id
+                  (append old (list (list 'qss--rowid nil id)))
+                old)))
     (qss-sql--copy base (qss--sort-stage parsed)
                    :order (cl-remove-if
                            ;; rowid ascending is the order anyway
@@ -578,9 +695,9 @@ rowid breaks the last ties."
 (cl-defmethod qss-count ((rel qss-relation))
   "Count the rows of the query REL in SQL."
   (let ((q (qss-sql-query rel)))
-    (qss-sql--with-db db (qss-relation-file rel)
-      (caar (sqlite-select db (format "SELECT COUNT(*) FROM (\n%s\n) AS t" (car q))
-                           (vconcat (cdr q)))))))
+    (caar (qss-sql-db-select (qss-relation-file rel)
+                             (format "SELECT COUNT(*) FROM (\n%s\n) AS t" (car q))
+                             (cdr q)))))
 
 (defun qss-sql--project (rel keys stage)
   "Return REL cut down to the columns KEYS (in this order), titled STAGE."
@@ -633,7 +750,7 @@ extends the title.  EXTRA-PARAMS come after those of REL."
   "Join the query REL with OTHER in SQL, if OTHER is a query of the same file.
 Otherwise in memory."
   (if (not (and (qss-relation-p other)
-                (equal (qss-relation-file other) (qss-relation-file rel))))
+                (qss-sql--same-db-p (qss-relation-file other) (qss-relation-file rel))))
       (cl-call-next-method)
     (pcase-let* ((`(,on ,kind ,suffix ,prefix) (qss--join-args options))
                  (left-names (mapcar #'car (qss-relation-columns rel)))
@@ -668,7 +785,8 @@ Otherwise in memory."
                              (if (eq kind 'left) "LEFT JOIN" "JOIN")
                              (replace-regexp-in-string "^" "  " (car rq))
                              ;; NULL matches NULL, as in Nushell
-                             (mapconcat (lambda (p) (format "l.%s IS r.%s" (funcall lcol (car p))
+                             (mapconcat (lambda (p) (format "l.%s %s r.%s" (funcall lcol (car p))
+                                                            (qss-sql--dialect rel :is)
                                                             (funcall rcol (cdr p))))
                                         pairs " AND "))
                      (append (cdr lq) (cdr rq)))))))
@@ -729,7 +847,9 @@ The rows are groups (`qss-group') whose rows a query of their own fetches."
                       "all rows"))))
     ;; sorted by the keys, missing values last, as in memory
     (setf (qss-relation-order grouped)
-          (mapcar (lambda (k) (list k nil (qss-sql-quote (symbol-name k)))) keys))
+          (mapcar (lambda (k) (list k nil (qss-sql--binary rel (qss-sql-quote (symbol-name k))
+                                                           (nth 2 (assq k (qss-relation-columns rel))))))
+                  keys))
     grouped))
 
 (cl-defmethod qss-group-sum ((rel qss-relation) &rest args)
@@ -755,8 +875,17 @@ The rows are groups (`qss-group') whose rows a query of their own fetches."
 ;;; Source: the tables of a database
 
 (cl-defstruct (qss-db-table (:constructor qss-db-table--make) (:copier nil))
-  "A table of the SQLite file FILE: its NAME and COLUMNS."
+  "A table of the database FILE (an SQLite file or another): NAME, COLUMNS."
   file name columns)
+
+(defun qss-sql-db-tables (db)
+  "Return the tables of the database DB as a table of `qss-db-table' rows."
+  (qss-make-table (format "tables %s" (qss-sql-db-label db))
+                  (mapcar (lambda (tab) (qss-db-table--make :file db :name (car tab)
+                                                            :columns (cdr tab)))
+                          (qss-sql-db-schema db))
+                  nil
+                  (lambda () (qss-sql-db-tables db))))
 
 (defun qss-tables (&optional file)
   "Return the tables of the SQLite file FILE (default `qss-database').
@@ -783,18 +912,18 @@ RET on one of them shows its rows."
 
 (cl-defmethod qss-default-action ((row qss-db-table))
   "Show the rows of the database table ROW."
-  (qss-display (qss-sqlite (qss-db-table-file row) (qss-db-table-name row))))
+  (qss-display (qss-sql-relation (qss-db-table-file row) (qss-db-table-name row))))
 
 (cl-defmethod qss-actions ((row qss-db-table))
   "Return the actions for the database table ROW."
   (ignore row)
   (list (cons "Show rows" #'qss-default-action)
         (cons "Show columns"
-              (lambda (r) (qss-show (qss-columns-of (qss-sqlite (qss-db-table-file r)
-                                                                (qss-db-table-name r))))))
+              (lambda (r) (qss-show (qss-columns-of (qss-sql-relation (qss-db-table-file r)
+                                                                      (qss-db-table-name r))))))
         (cons "Count" (lambda (r) (message "%s: %d rows" (qss-db-table-name r)
-                                           (qss-count (qss-sqlite (qss-db-table-file r)
-                                                                  (qss-db-table-name r))))))))
+                                           (qss-count (qss-sql-relation (qss-db-table-file r)
+                                                                        (qss-db-table-name r))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Writing: the word `into'

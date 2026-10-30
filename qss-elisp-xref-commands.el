@@ -232,6 +232,7 @@ ones, whose names contain --."
   (and (boundp 'qss--whole) (qss-relation-p qss--whole)
        (let ((db (qss-elisp-xref-database-file)))
          (and (file-exists-p db)
+              (stringp (qss-relation-file qss--whole))
               (file-equal-p (qss-relation-file qss--whole) db)))))
 
 (cl-defmethod qss-actions ((row cons))

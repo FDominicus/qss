@@ -97,6 +97,9 @@
 (qss-define-contract qss-processes (-> qss-table-p))
 (qss-define-contract qss-run (-> stringp (rest stringp) qss-table-p))
 (qss-define-contract qss-sqlite (-> stringp (opt (or/c stringp symbolp)) qss-relation-p))
+(qss-define-contract qss-odbc-source
+  (-> stringp (opt (or/c stringp symbolp)) (or/c qss-relation-p qss-table-p)))
+(qss-define-contract qss-sql-relation (-> any (or/c stringp symbolp) qss-relation-p))
 (qss-define-contract qss-tables (-> (opt stringp) qss-table-p))
 (qss-define-contract qss-nu (-> stringp any))
 (qss-define-contract qss-demo-database (-> stringp))

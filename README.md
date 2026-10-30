@@ -130,6 +130,8 @@ Or clone the repository, put the directory on your `load-path` and
 | `(sqlite FILE TABLE)` | rows of an SQLite table, as a query |
 | `(sqlite TABLE)` | the same in the central file `qss-database` |
 | `(tables [FILE])` | the tables of an SQLite file (default `qss-database`); `RET` shows the rows |
+| `(odbc DSN TABLE)` | rows of a table of any ODBC database, as a query (see [ODBC](#odbc)) |
+| `(odbc DSN)` | the tables of an ODBC data source; `RET` shows the rows |
 | `(nu COMMAND)` | the result of a Nushell command |
 | `(run PROGRAM ARGS...)` | the output lines of a program (column `line`), no shell |
 | `(lines FILE)` | the lines of a file (columns `number` and `line`); `RET` visits the line |
@@ -386,6 +388,55 @@ qss> (sqlite (qss-demo-database) "Orders") (where (is-null :status))
 - A file row also stores its `path`, so `RET` on the stored row opens
   the file (or enters the directory in the REPL). Other row types can
   name fields to store with the generic `qss-stored-fields`.
+
+### ODBC
+
+Any database with an ODBC driver is a source like SQLite, with the same
+words; they become SQL in the dialect of the database:
+
+```elisp
+(qss-> (odbc "test" "orders")
+       (where (> :amount 100))
+       (sort-by order-date :desc)
+       (first 20))
+(qss-> (files "~") (where (> :size "10mb")) (into odbc "test" "big_files"))
+```
+
+`DSN` is a data source name (`odbcinst -q -s` lists them) or a full
+connection string. Emacs Lisp has no FFI, so the calls into ODBC live in
+a small dynamic module (`module/qss-odbc-module.c`, MIT). Build it once:
+
+```
+M-x qss-odbc-build-module
+```
+
+It needs a C compiler and the ODBC headers (on Debian/Ubuntu
+`unixodbc-dev`). If `emacs-module.h` is not installed, set
+`qss-odbc-make-arguments` to `("EMACS_INCLUDE=/path/to/emacs/src")`.
+
+Tested with PostgreSQL (psqlODBC, Unicode and ANSI) and SQLite (SQLite3
+ODBC), all shared cases of `spec/cases.sexp` pass on both. Other
+databases get standard SQL as PostgreSQL has it; SQL Server, Access and
+MySQL need dialects of their own (`TOP`, quoting). NUMERIC values with
+digits after the point are floats in tables; conditions are SQL and
+compare exactly. Editing rows works on SQLite files only.
+
+The layer below is usable on its own (`qss-odbc.el`):
+
+```elisp
+(setq con (qss-odbc-connect "test"))
+(qss-odbc-query con "SELECT id, name FROM person WHERE id > ?" 10)
+;; => (("id" "name") (11 "Müller") (12 "Ærø"))
+(qss-odbc-do-query ((id name) con "SELECT id, name FROM person")
+  (message "%s %s" id name))
+(qss-odbc-with-transaction con
+  (qss-odbc-execute con "UPDATE person SET name = ? WHERE id = ?" "X" 11))
+```
+
+There, NUMERIC comes exactly, as an integer scaled by the scale of the
+column (1094.80 in a `NUMERIC(10,2)` is `109480`,
+`qss-odbc-decimal-string` shows it); dates and times come as text, the
+wall clock as stored. Errors are `qss-odbc-error` with the SQLSTATE.
 
 ### Changing rows
 
@@ -916,7 +967,14 @@ emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
 ```
 
 The SQLite tests are skipped when Emacs has no SQLite, the Nushell tests
-when `nu` is not installed. The tests run with the contracts on, so
+when `nu` is not installed, the ODBC tests when the module is not built
+or no data source is reachable. They run against the DSNs in the
+environment variable `QSS_ODBC_DSNS` (default `test`) and create and
+drop the tables `qss_odbc_t` and `qss_spec_*` there:
+
+```
+QSS_ODBC_DSNS="test sqlitetest" emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
+``` The tests run with the contracts on, so
 every test is a check of the contracts as well — and of the code
 against them.
 

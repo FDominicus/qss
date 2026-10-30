@@ -8,3 +8,6 @@ doc/*.aux
 doc/*.log
 doc/*.toc
 doc/*.out
+module/*.so
+module/*.dll
+module/*.dylib
