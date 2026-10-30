@@ -13,6 +13,7 @@
 
 (require 'ert)
 (require 'qss)
+(require 'qss-spec-test)                ; qss-spec-test--odbc-ready-p
 
 (declare-function qss-odbc-execute "qss-odbc")
 (declare-function qss-odbc-available-p "qss-odbc")
@@ -22,7 +23,7 @@
 Use it directly in the body of `ert-deftest' (it uses `skip-unless')."
   (declare (indent 1))
   `(progn
-     (skip-unless (and (require 'qss-odbc nil t) (qss-odbc-available-p)))
+     (skip-unless (qss-spec-test--odbc-ready-p 'qss-sql-odbc))
      (let ((ran nil))
        (dolist (,dsn (split-string (or (getenv "QSS_ODBC_DSNS") "test")))
          (when (condition-case nil (qss-sql-odbc-database ,dsn) (error nil))

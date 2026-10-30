@@ -111,14 +111,18 @@ Only what is built into Emacs 29 is used: `vtable`, `sqlite`,
 
 ## Install
 
-Emacs 29.1 or later.
+Emacs 29.1 or later, and the package
+[qss-contract](https://github.com/FDominicus/qss-contract);
+[qss-odbc](https://github.com/FDominicus/qss-odbc) is optional (for ODBC
+databases).
 
 ```elisp
+(package-vc-install "https://github.com/FDominicus/qss-contract")
 (package-vc-install "https://github.com/FDominicus/qss")
 (require 'qss)
 ```
 
-Or clone the repository, put the directory on your `load-path` and
+Or clone the repositories, put the directories on your `load-path` and
 `(require 'qss)`.
 
 ## Sources
@@ -736,26 +740,12 @@ at the boundaries they cost nothing noticeable — a pipe over 20000
 rows is a few percent slower — inside the loops they would.
 `qss-contract-enabled` turns all checks off.
 
-### The language
+### The library
 
-| Contract | Means |
-|---|---|
-| `stringp`, `natnump`, `qss-table-p` … | a predicate |
-| `any` | anything |
-| `(or/c C ...)`, `(and/c C ...)`, `(not/c C)` | one of, all of, not |
-| `(one-of V ...)` | one of these values |
-| `(listof C)`, `(list/c C ...)`, `(cons/c A D)` | lists and conses |
-| `(lambda (x) ...)` | a predicate written in place |
-| `(-> ARG ... RESULT)` | a function; `(opt C)` an optional argument (nil always allowed), `(rest C)` the rest |
-| `qss-column-spec` … | a contract named with `qss-define-contract-type` |
-
-A function passed as an argument is only checked to be a function, not
-wrapped (Racket does that; qss does not, yet).
-
-### For your own code
-
-The library, **qss-contract.el**, depends on nothing else of qss and can
-be used for any Emacs Lisp:
+The contracts come from the package
+[qss-contract](https://github.com/FDominicus/qss-contract), which depends
+on nothing else of qss and can be used for any Emacs Lisp; its README
+describes the language of contracts (`->`, `opt`, `or/c`, `listof` …):
 
 ```elisp
 (require 'qss-contract)

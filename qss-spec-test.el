@@ -132,7 +132,7 @@ Return a list of (NAME odbc MESSAGE)."
 (ert-deftest qss-spec-cases-odbc ()
   "The shared cases against each DSN of QSS_ODBC_DSNS (default \"test\").
 Needs the package qss-odbc with its module built."
-  (skip-unless (and (require 'qss-odbc nil t) (qss-odbc-available-p)))
+  (skip-unless (qss-spec-test--odbc-ready-p 'qss-spec-cases-odbc))
   (let ((ran nil))
     (dolist (dsn (split-string (or (getenv "QSS_ODBC_DSNS") "test")))
       (when (condition-case err (qss-sql-odbc-database dsn)
@@ -146,6 +146,15 @@ Needs the package qss-odbc with its module built."
                                          failures "\n")))))))
     (unless ran (message "qss-spec-cases-odbc: skipped, no DSN reachable"))
     (skip-unless ran)))
+
+(defun qss-spec-test--odbc-ready-p (name)
+  "Return non-nil if qss-odbc is there with its module built.
+Otherwise say why test NAME is skipped."
+  (cond ((not (require 'qss-odbc nil t))
+         (message "%s: skipped, package qss-odbc not found on the load-path" name) nil)
+        ((not (qss-odbc-available-p))
+         (message "%s: skipped, ODBC module not built (M-x qss-odbc-build-module)" name) nil)
+        (t t)))
 
 (defun qss-spec-test-failures (&optional only)
   "Run the shared cases (with ONLY: those whose name contains it).

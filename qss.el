@@ -4,8 +4,8 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.17.0
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 0.18.0
+;; Package-Requires: ((emacs "29.1") (qss-contract "0.1.0"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
 ;; SPDX-License-Identifier: MIT
@@ -64,7 +64,7 @@
 ;;   qss-present.el   presentations and accept (after CLIM): typed
 ;;                    objects, highlighted choices, typed commands
 ;;   qss-menu.el      actions at point: a, the right mouse button, w
-;;   qss-contract.el  contracts with blame, after Racket (stands alone)
+;;   (contracts with blame, after Racket: the package qss-contract)
 ;;   qss-interface.el the public interface of qss with its contracts
 ;;   qss-sql-odbc.el  ODBC as a source: (odbc DSN TABLE), (into odbc DSN NAME);
 ;;                    needs the package qss-odbc, loaded only when used
