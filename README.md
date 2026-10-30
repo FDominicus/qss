@@ -395,6 +395,7 @@ Any database with an ODBC driver is a source like SQLite, with the same
 words; they become SQL in the dialect of the database:
 
 ```elisp
+(qss-> (odbc "test"))                         ; the tables of the DSN test
 (qss-> (odbc "test" "orders")
        (where (> :amount 100))
        (sort-by order-date :desc)
@@ -403,40 +404,19 @@ words; they become SQL in the dialect of the database:
 ```
 
 `DSN` is a data source name (`odbcinst -q -s` lists them) or a full
-connection string. Emacs Lisp has no FFI, so the calls into ODBC live in
-a small dynamic module (`module/qss-odbc-module.c`, MIT). Build it once:
-
-```
-M-x qss-odbc-build-module
-```
-
-It needs a C compiler and the ODBC headers (on Debian/Ubuntu
-`unixodbc-dev`). If `emacs-module.h` is not installed, set
-`qss-odbc-make-arguments` to `("EMACS_INCLUDE=/path/to/emacs/src")`.
+connection string. The calls into ODBC come from the package
+[qss-odbc](https://github.com/FDominicus/qss-odbc), a small C module and
+a library that stand alone; it is loaded on first use, and without it
+qss works as before.
 
 Tested with PostgreSQL (psqlODBC, Unicode and ANSI) and SQLite (SQLite3
-ODBC), all shared cases of `spec/cases.sexp` pass on both. Other
+ODBC); all shared cases of `spec/cases.sexp` pass on both. Other
 databases get standard SQL as PostgreSQL has it; SQL Server, Access and
-MySQL need dialects of their own (`TOP`, quoting). NUMERIC values with
-digits after the point are floats in tables; conditions are SQL and
-compare exactly. Editing rows works on SQLite files only.
-
-The layer below is usable on its own (`qss-odbc.el`):
-
-```elisp
-(setq con (qss-odbc-connect "test"))
-(qss-odbc-query con "SELECT id, name FROM person WHERE id > ?" 10)
-;; => (("id" "name") (11 "Müller") (12 "Ærø"))
-(qss-odbc-do-query ((id name) con "SELECT id, name FROM person")
-  (message "%s %s" id name))
-(qss-odbc-with-transaction con
-  (qss-odbc-execute con "UPDATE person SET name = ? WHERE id = ?" "X" 11))
-```
-
-There, NUMERIC comes exactly, as an integer scaled by the scale of the
-column (1094.80 in a `NUMERIC(10,2)` is `109480`,
-`qss-odbc-decimal-string` shows it); dates and times come as text, the
-wall clock as stored. Errors are `qss-odbc-error` with the SQLSTATE.
+MySQL need dialects of their own (`TOP`, quoting). Text compares by code
+points as in SQLite and memory, whatever the collation of the database
+(PostgreSQL: `COLLATE "C"`). NUMERIC values with digits after the point
+are floats in tables; conditions are SQL and compare exactly. Editing
+rows works on SQLite files only.
 
 ### Changing rows
 
@@ -967,13 +947,13 @@ emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
 ```
 
 The SQLite tests are skipped when Emacs has no SQLite, the Nushell tests
-when `nu` is not installed, the ODBC tests when the module is not built
+when `nu` is not installed, the ODBC tests when qss-odbc is missing or its module not built
 or no data source is reachable. They run against the DSNs in the
 environment variable `QSS_ODBC_DSNS` (default `test`) and create and
-drop the tables `qss_odbc_t` and `qss_spec_*` there:
+drop the tables `qss_sql_odbc_t` and `qss_spec_*` there:
 
 ```
-QSS_ODBC_DSNS="test sqlitetest" emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
+QSS_ODBC_DSNS="test sqlitetest" emacs --batch -L /path/to/qss -L /path/to/qss-odbc -l qss -f qss-run-tests-batch
 ``` The tests run with the contracts on, so
 every test is a check of the contracts as well — and of the code
 against them.

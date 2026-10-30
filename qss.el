@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.16.1
+;; Version: 0.17.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -66,8 +66,8 @@
 ;;   qss-menu.el      actions at point: a, the right mouse button, w
 ;;   qss-contract.el  contracts with blame, after Racket (stands alone)
 ;;   qss-interface.el the public interface of qss with its contracts
-;;   qss-odbc.el      ODBC databases through a small C module (module/)
-;;   qss-sql-odbc.el  ODBC as a source: (odbc DSN TABLE), (into odbc DSN NAME)
+;;   qss-sql-odbc.el  ODBC as a source: (odbc DSN TABLE), (into odbc DSN NAME);
+;;                    needs the package qss-odbc, loaded only when used
 ;;   qss-edit.el      changing rows of SQLite tables: e d u, C-c C-c;
 ;;                    the words update-rows and delete-rows
 ;;   qss-repl.el      M-x qss, the REPL
@@ -78,7 +78,7 @@
 (require 'qss-table)
 (require 'qss-pipe)
 (require 'qss-sql)
-(require 'qss-sql-odbc)                 ; the module is built on demand
+(require 'qss-sql-odbc)                 ; qss-odbc itself only on first use
 (require 'qss-present)
 (require 'qss-menu)
 (require 'qss-repl)

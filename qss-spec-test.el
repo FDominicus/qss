@@ -19,6 +19,9 @@
 (require 'ert)
 (require 'qss)
 
+(declare-function qss-odbc-execute "qss-odbc")
+(declare-function qss-odbc-available-p "qss-odbc")
+
 (defconst qss-spec-test--dir
   (expand-file-name "spec/" (file-name-directory (or load-file-name buffer-file-name)))
   "Directory of the shared files.")
@@ -127,8 +130,9 @@ Return a list of (NAME odbc MESSAGE)."
     (nreverse failures)))
 
 (ert-deftest qss-spec-cases-odbc ()
-  "The shared cases against each DSN of QSS_ODBC_DSNS (default \"test\")."
-  (skip-unless (qss-odbc-available-p))
+  "The shared cases against each DSN of QSS_ODBC_DSNS (default \"test\").
+Needs the package qss-odbc with its module built."
+  (skip-unless (and (require 'qss-odbc nil t) (qss-odbc-available-p)))
   (let ((ran nil))
     (dolist (dsn (split-string (or (getenv "QSS_ODBC_DSNS") "test")))
       (when (condition-case err (qss-sql-odbc-database dsn)

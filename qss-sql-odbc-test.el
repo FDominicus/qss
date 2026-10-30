@@ -14,12 +14,15 @@
 (require 'ert)
 (require 'qss)
 
+(declare-function qss-odbc-execute "qss-odbc")
+(declare-function qss-odbc-available-p "qss-odbc")
+
 (defmacro qss-sql-odbc-test--each (dsn &rest body)
   "Run BODY with DSN bound to each reachable DSN; skip if there is none.
 Use it directly in the body of `ert-deftest' (it uses `skip-unless')."
   (declare (indent 1))
   `(progn
-     (skip-unless (qss-odbc-available-p))
+     (skip-unless (and (require 'qss-odbc nil t) (qss-odbc-available-p)))
      (let ((ran nil))
        (dolist (,dsn (split-string (or (getenv "QSS_ODBC_DSNS") "test")))
          (when (condition-case nil (qss-sql-odbc-database ,dsn) (error nil))

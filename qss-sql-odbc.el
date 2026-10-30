@@ -30,13 +30,33 @@
 ;; tables (avg() in PostgreSQL has 20 of them); exact values come from
 ;; `qss-odbc-select'.  Conditions are SQL, so they compare exactly.
 ;; Editing rows (qss-edit) works on SQLite files only.
+;;
+;; The calls into ODBC come from the package qss-odbc
+;; (https://github.com/FDominicus/qss-odbc).  It is loaded on first use;
+;; without it qss works as before, and (odbc ...) says what is missing.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'qss-sql)
-(require 'qss-odbc)
 
+(defun qss-sql-odbc--require ()
+  "Load qss-odbc, or signal a `user-error' saying where to get it."
+  (unless (require 'qss-odbc nil t)
+    (user-error "ODBC needs the package qss-odbc (https://github.com/FDominicus/qss-odbc)")))
+
+(declare-function qss-odbc-connect "qss-odbc")
+(declare-function qss-odbc-connected-p "qss-odbc")
+(declare-function qss-odbc-disconnect "qss-odbc")
+(declare-function qss-odbc-execute "qss-odbc")
+(declare-function qss-odbc-query "qss-odbc")
+(declare-function qss-odbc-tables "qss-odbc")
+(declare-function qss-odbc-table-columns "qss-odbc")
+(declare-function qss-odbc-connection-dbms "qss-odbc")
+(declare-function qss-odbc-connection-handle "qss-odbc")
+(declare-function qss-odbc--column "qss-odbc")
+(declare-function qss-odbc--value "qss-odbc")
+(declare-function qss-odbc--params "qss-odbc")
 (declare-function qss-odbc--exec "qss-odbc-module")
 (declare-function qss-odbc--columns "qss-odbc-module")
 (declare-function qss-odbc--fetch "qss-odbc-module")
@@ -46,17 +66,18 @@
 (declare-function qss-odbc--set-autocommit "qss-odbc-module")
 
 (cl-defstruct (qss-sql-odbc (:constructor qss-sql-odbc--make) (:copier nil))
-  "An ODBC database as the database of queries.
+	      "An ODBC database as the database of queries.
 DSN is the data source name (or connection string), CONNECTION the open
 `qss-odbc-connection', SCHEMA the cached tables (NAME . COLUMNS),
 KINDS an alist of table name -> \"TABLE\" or \"VIEW\"."
-  dsn connection schema kinds)
+	      dsn connection schema kinds)
 
 (defvar qss-sql-odbc--databases (make-hash-table :test #'equal)
   "DSN -> `qss-sql-odbc', one per data source.")
 
 (defun qss-sql-odbc-database (dsn)
   "Return the database for DSN, connecting if needed."
+  (qss-sql-odbc--require)
   (let ((db (or (gethash dsn qss-sql-odbc--databases)
                 (puthash dsn (qss-sql-odbc--make :dsn dsn) qss-sql-odbc--databases))))
     (qss-sql-odbc--connection db)
@@ -65,7 +86,7 @@ KINDS an alist of table name -> \"TABLE\" or \"VIEW\"."
 (defun qss-sql-odbc--connection (db)
   "Return the open connection of DB, opening it again if it was closed."
   (let ((con (qss-sql-odbc-connection db)))
-    (unless (qss-odbc-connected-p con)
+    (unless (and con (qss-odbc-connected-p con))
       (setf con (qss-odbc-connect (qss-sql-odbc-dsn db))
             (qss-sql-odbc-connection db) con
             (qss-sql-odbc-schema db) nil))
@@ -76,6 +97,7 @@ KINDS an alist of table name -> \"TABLE\" or \"VIEW\"."
   (interactive)
   (maphash (lambda (k db)
              (when (and (or (null dsn) (equal k dsn))
+                        (qss-sql-odbc-connection db)
                         (qss-odbc-connected-p (qss-sql-odbc-connection db)))
                (qss-odbc-disconnect (qss-sql-odbc-connection db))))
            qss-sql-odbc--databases))
@@ -239,38 +261,47 @@ types of the columns are recorded.  Return the number of rows written."
     (unless specs (user-error "Nothing to store: the table has no columns"))
     (when (and exists (null mode))
       (user-error "Table %s exists in %s: add :replace or :append" name (qss-sql-odbc-dsn db)))
-    (qss-odbc-with-transaction con
-      (when (and exists (eq mode 'replace))
-        (qss-odbc-execute con (format "DROP TABLE %s" (qss-sql-quote exists))))
-      (unless (and exists (eq mode 'append))
-        (let ((types (mapcar (lambda (spec)
-                               (qss-sql--column-types
-                                spec (mapcar (lambda (r) (qss-field r (car spec))) rows)))
-                             specs)))
-          (qss-odbc-execute con (format "CREATE TABLE %s (%s)" quoted
-                                        (mapconcat (lambda (st)
-                                                     (format "%s %s" (qss-sql-quote (symbol-name (car (car st))))
-                                                             (qss-sql-odbc--sql-type db (cdr st))))
-                                                   (cl-mapcar #'cons specs (mapcar #'car types))
-                                                   ", ")))
-          (unless (cl-find qss-sql--types-table tables :test #'equal)
-            (qss-odbc-execute con (format "CREATE TABLE %s (\"table\" VARCHAR(255), \"column\" VARCHAR(255),
+    ;; one transaction (as `qss-odbc-with-transaction', which is a macro
+    ;; of qss-odbc and so not usable before qss-odbc is loaded)
+    (let ((handle (qss-odbc-connection-handle con)) (ok nil))
+      (qss-odbc--set-autocommit handle nil)
+      (unwind-protect
+	  (progn
+	    (when (and exists (eq mode 'replace))
+              (qss-odbc-execute con (format "DROP TABLE %s" (qss-sql-quote exists))))
+	    (unless (and exists (eq mode 'append))
+              (let ((types (mapcar (lambda (spec)
+				     (qss-sql--column-types
+                                      spec (mapcar (lambda (r) (qss-field r (car spec))) rows)))
+				   specs)))
+		(qss-odbc-execute con (format "CREATE TABLE %s (%s)" quoted
+                                              (mapconcat (lambda (st)
+							   (format "%s %s" (qss-sql-quote (symbol-name (car (car st))))
+								   (qss-sql-odbc--sql-type db (cdr st))))
+							 (cl-mapcar #'cons specs (mapcar #'car types))
+							 ", ")))
+		(unless (cl-find qss-sql--types-table tables :test #'equal)
+		  (qss-odbc-execute con (format "CREATE TABLE %s (\"table\" VARCHAR(255), \"column\" VARCHAR(255),
                                              \"type\" VARCHAR(40), PRIMARY KEY (\"table\", \"column\"))"
-                                          types-table)))
-          (qss-odbc-execute con (format "DELETE FROM %s WHERE lower(\"table\") = lower(?)" types-table)
-                            name)
-          (cl-mapc (lambda (spec type)
-                     (when (cdr type)
-                       (qss-odbc-execute con (format "INSERT INTO %s VALUES (?, ?, ?)" types-table)
-                                         name (symbol-name (car spec)) (symbol-name (cdr type)))))
-                   specs types)))
-      (let ((insert (format "INSERT INTO %s (%s) VALUES (%s)" quoted
-                            (mapconcat (lambda (s) (qss-sql-quote (symbol-name (car s)))) specs ", ")
-                            (mapconcat (lambda (_) "?") specs ", "))))
-        (dolist (row rows)
-          (apply #'qss-odbc-execute con insert
-                 (mapcar (lambda (spec) (qss-sql--store-value (qss-field row (car spec)) spec))
-                         specs)))))
+						types-table)))
+		(qss-odbc-execute con (format "DELETE FROM %s WHERE lower(\"table\") = lower(?)" types-table)
+				  name)
+		(cl-mapc (lambda (spec type)
+			   (when (cdr type)
+			     (qss-odbc-execute con (format "INSERT INTO %s VALUES (?, ?, ?)" types-table)
+                                               name (symbol-name (car spec)) (symbol-name (cdr type)))))
+			 specs types)))
+	    (let ((insert (format "INSERT INTO %s (%s) VALUES (%s)" quoted
+				  (mapconcat (lambda (s) (qss-sql-quote (symbol-name (car s)))) specs ", ")
+				  (mapconcat (lambda (_) "?") specs ", "))))
+              (dolist (row rows)
+		(apply #'qss-odbc-execute con insert
+                       (mapcar (lambda (spec) (qss-sql--store-value (qss-field row (car spec)) spec))
+                               specs))))
+	    (qss-odbc--commit handle)
+	    (setq ok t))
+	(unless ok (qss-odbc--rollback handle))
+	(qss-odbc--set-autocommit handle t)))
     (setf (qss-sql-odbc-schema db) nil (qss-sql-odbc-kinds db) nil)
     (length rows)))
 
