@@ -86,8 +86,10 @@ Use it directly in the body of `ert-deftest' (it uses `skip-unless')."
 (ert-deftest qss-sql-odbc-into-times ()
   "into odbc stores times as TIMESTAMP (DATETIME), conditions compare them."
   (qss-sql-odbc-test--each dsn
-     (let ((rows (list (list :nr 1 :when (qss-odbc-parse-time "2026-01-15 08:30:00"))
-                       (list :nr 2 :when (qss-odbc-parse-time "2026-10-31 12:00:00"))
+     ;; qss-time: Emacs 32 gives whole seconds as a plain integer,
+     ;; which qss would take for a number
+     (let ((rows (list (list :nr 1 :when (qss-time (qss-odbc-parse-time "2026-01-15 08:30:00")))
+                       (list :nr 2 :when (qss-time (qss-odbc-parse-time "2026-10-31 12:00:00")))
                        (list :nr 3 :when nil))))
        ;; parse-time gives UTC; into writes local time, as for SQLite
        (qss-> (qss-make-table "times" rows '(nr when)) (into odbc dsn "qss_sql_odbc_t" :replace))
