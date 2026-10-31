@@ -818,10 +818,11 @@ environment variable `QSS_ODBC_DSNS` (default `test`) and create and
 drop the tables `qss_sql_odbc_t` and `qss_spec_*` there:
 
 ```
-QSS_ODBC_DSNS="test sqlitetest" emacs --batch -L /path/to/qss -L /path/to/qss-odbc -l qss -f qss-run-tests-batch
-``` The tests run with the contracts on, so
-every test is a check of the contracts as well — and of the code
-against them.
+QSS_ODBC_DSNS="test sqlitetest" emacs -Q --batch -L /path/to/qss -l qss-all-tests -f qss-run-all-tests-batch
+```
+
+The tests run with the contracts on, so every test is a check of the
+contracts as well — and of the code against them.
 
 ## Where the ideas come from
 
