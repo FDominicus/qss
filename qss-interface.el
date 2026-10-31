@@ -98,7 +98,7 @@
 (qss-define-contract qss-run (-> stringp (rest stringp) qss-table-p))
 (qss-define-contract qss-sqlite (-> stringp (opt (or/c stringp symbolp)) qss-relation-p))
 (qss-define-contract qss-odbc-source
-  (-> stringp (opt (or/c stringp symbolp)) (or/c qss-relation-p qss-table-p)))
+  (-> stringp (opt (or/c stringp symbolp)) (rest any) (or/c qss-relation-p qss-table-p)))
 (qss-define-contract qss-sql-relation (-> any (or/c stringp symbolp) qss-relation-p))
 (qss-define-contract qss-tables (-> (opt stringp) qss-table-p))
 (qss-define-contract qss-nu (-> stringp any))
@@ -137,7 +137,7 @@
 (qss-define-contract qss-sql-write
   (-> qss-table-p stringp stringp (opt (one-of replace append)) natnump))
 (qss-define-contract qss-sql-name-key (-> stringp symbolp))
-(qss-define-contract qss-sql-rowid (-> any (or/c null integerp)))
+(qss-define-contract qss-sql-rowid (-> any (or/c null integerp list)))
 (qss-define-contract qss-update-rows (-> qss-tabular (rest any) natnump))
 (qss-define-contract qss-delete-rows (-> qss-tabular (rest any) natnump))
 

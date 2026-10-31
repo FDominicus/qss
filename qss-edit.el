@@ -1,4 +1,4 @@
-;;; qss-edit.el --- Changing rows of SQLite tables  -*- lexical-binding: t -*-
+;;; qss-edit.el --- Changing rows of database tables  -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2026 Friedrich Dominicus
 ;; SPDX-License-Identifier: MIT
@@ -32,7 +32,11 @@
 ;; `first') they refuse, unless :all-rows t says so.
 ;;
 ;; Rows are found by their rowid, so only queries straight on a table
-;; can be changed: not views, joins or groups.
+;; can be changed: not views, joins or groups.  Tables of other
+;; databases (ODBC, qss-sql-odbc.el) work the same; there the key is
+;; the primary key (`qss-sql-db-key'), on PostgreSQL ctid if there is
+;; none, on MariaDB/MySQL the hidden _qss_rowid of a table made by
+;; `into'.  A table without key cannot be changed.
 
 ;;; Code:
 
@@ -53,30 +57,60 @@
 
 (defun qss-edit--check-relation (rel what)
   "Signal an error unless the rows of REL can be changed; WHAT is the word."
-  (unless (and (qss-relation-p rel) (stringp (qss-relation-file rel)))
-    (user-error "%s works on SQLite tables only" what))
+  (unless (qss-relation-p rel)
+    (user-error "%s works on database tables only" what))
   (unless (qss-sql--direct-p rel)
     (user-error "%s: this query is not straight on a table (a join, a group or after first)" what))
-  (qss-sql--with-db db (qss-relation-file rel)
-    (unless (qss-sql--real-table-p db rel)
-      (user-error "%s: %s is a view, not a table" what (qss-relation-table rel)))))
+  (unless (qss-edit--keys rel)
+    (if (stringp (qss-relation-file rel))
+        (user-error "%s: %s is a view, not a table" what (qss-relation-table rel))
+      (user-error "%s: %s is a view or has no primary key; its rows cannot be told apart"
+                  what (qss-relation-table rel)))))
+
+(defun qss-edit--keys (rel)
+  "The SQL of the key columns of the table of REL (see `qss-sql-db-key')."
+  (qss-sql-db-key (qss-relation-file rel) (qss-relation-table rel)))
+
+(defun qss-edit--key-where (rel)
+  "SQL that finds one row of REL by its key, as \"rowid = ?\"."
+  (mapconcat (lambda (k) (format "%s = ?" k)) (qss-edit--keys rel) " AND "))
+
+(defun qss-edit--key-values (row)
+  "The key values of ROW as a list (an SQLite rowid becomes a list of one)."
+  (let ((id (qss-sql-rowid row)))
+    (if (listp id) id (list id))))
+
+(defun qss-edit--rows-in (rel)
+  "Return (SQL . PARAMS): the condition that picks the rows of the query REL.
+SQLite: rowid IN (subquery).  Others: the key IN a derived table over the
+subquery (MariaDB refuses a subquery on the table it changes, and LIMIT
+in an IN subquery)."
+  (let* ((keys (qss-edit--keys rel))
+         (q (qss-sql-query rel (mapconcat #'identity keys ", "))))
+    (if (stringp (qss-relation-file rel))
+        (cons (format "rowid IN (\n%s\n)" (car q)) (cdr q))
+      (cons (format "%s IN (SELECT * FROM (\n%s\n) AS qss_keys)"
+                    (if (cdr keys) (concat "(" (mapconcat #'identity keys ", ") ")") (car keys))
+                    (car q))
+            (cdr q)))))
+
+(defun qss-edit--row-exists-p (db table where id)
+  "Return non-nil if TABLE of DB has the row that WHERE finds with ID."
+  (let ((n (caar (qss-sql-db-select db (format "SELECT COUNT(*) FROM %s WHERE %s" table where) id))))
+    (and n (> n 0))))
 
 (defun qss-edit--column (rel key)
   "Return the column entry (KEY NAME TYPE QSS-TYPE) of KEY in REL."
   (qss-sql--column rel key)              ; signals if unknown
   (assq key (qss-relation-columns rel)))
 
-(defun qss-edit--value (column value)
-  "Return VALUE as it is stored in COLUMN (an entry of the schema).
+(defun qss-edit--value (column value &optional db)
+  "Return VALUE as it is stored in COLUMN (an entry of the schema) of DB.
 Times become text, \"10kb\" a number in a numeric column."
-  (let ((v (qss-sql--value value)))
+  (let ((v (if (and db (not (stringp db))) (qss-sql-db-value db value) (qss-sql--value value))))
     (if (and (stringp v) (eq (qss-sql--affinity (nth 2 column)) 'numeric))
         (qss-sql--quantity v)
       v)))
-
-(defun qss-edit--rowids-sql (rel)
-  "Return (SQL . PARAMS) selecting the rowids of the rows of REL."
-  (qss-sql-query rel "rowid"))
 
 ;;; ------------------------------------------------------------------
 ;;; The words update-rows and delete-rows
@@ -103,7 +137,7 @@ Without where or first it refuses, unless :all-rows t.")
 
 (cl-defmethod qss-update-rows (_table &rest _changes)
   "Refuse: only stored rows can be changed."
-  (user-error "update-rows works on SQLite tables only; for a table in memory use each"))
+  (user-error "update-rows works on database tables only; for a table in memory use each"))
 
 (cl-defmethod qss-update-rows ((rel qss-relation) &rest changes)
   "Change the rows of REL in SQLite."
@@ -117,15 +151,16 @@ Without where or first it refuses, unless :all-rows t.")
                (value (pop pairs))
                (column (qss-edit--column rel key)))
           (push (format "%s = ?" (qss-sql-quote (nth 1 column))) sets)
-          (push (qss-edit--value column value) params)))
-      (let ((ids (qss-edit--rowids-sql rel)))
-        (qss-sql--with-db db (qss-relation-file rel)
-          (with-sqlite-transaction db
-            (sqlite-execute db (format "UPDATE %s SET %s WHERE rowid IN (\n%s\n)"
-                                       (qss-sql-quote (qss-relation-table rel))
-                                       (mapconcat #'identity (nreverse sets) ", ")
-                                       (car ids))
-                            (vconcat (nreverse params) (cdr ids)))))))))
+          (push (qss-edit--value column value (qss-relation-file rel)) params)))
+      (let ((in (qss-edit--rows-in rel)))
+        (qss-sql-db-call-in-transaction
+         (qss-relation-file rel)
+         (lambda (exec)
+           (funcall exec (format "UPDATE %s SET %s WHERE %s"
+                                 (qss-sql--quote-table rel)
+                                 (mapconcat #'identity (nreverse sets) ", ")
+                                 (car in))
+                    (append (nreverse params) (cdr in)))))))))
 
 (cl-defgeneric qss-delete-rows (table &rest options)
   "Delete the stored rows of TABLE, an SQLite query; return their number.
@@ -134,7 +169,7 @@ where or first it refuses, unless OPTIONS has :all-rows t.")
 
 (cl-defmethod qss-delete-rows (_table &rest _options)
   "Refuse: only stored rows can be deleted."
-  (user-error "delete-rows works on SQLite tables only; for a table in memory use where"))
+  (user-error "delete-rows works on database tables only; for a table in memory use where"))
 
 (cl-defmethod qss-delete-rows ((rel qss-relation) &rest options)
   "Delete the rows of REL in SQLite."
@@ -142,12 +177,13 @@ where or first it refuses, unless OPTIONS has :all-rows t.")
     (when rest (user-error "delete-rows: the only option is :all-rows t, not %S" (car rest)))
     (qss-edit--check-relation rel "delete-rows")
     (qss-edit--guard rel all "delete-rows")
-    (let ((ids (qss-edit--rowids-sql rel)))
-      (qss-sql--with-db db (qss-relation-file rel)
-        (with-sqlite-transaction db
-          (sqlite-execute db (format "DELETE FROM %s WHERE rowid IN (\n%s\n)"
-                                     (qss-sql-quote (qss-relation-table rel)) (car ids))
-                          (vconcat (cdr ids))))))))
+    (let ((in (qss-edit--rows-in rel)))
+      (qss-sql-db-call-in-transaction
+       (qss-relation-file rel)
+       (lambda (exec)
+         (funcall exec (format "DELETE FROM %s WHERE %s"
+                               (qss-sql--quote-table rel) (car in))
+                  (cdr in)))))))
 
 (setf (alist-get 'update-rows qss--words) 'values)
 (setf (alist-get 'delete-rows qss--words) 'values)
@@ -318,34 +354,42 @@ With a prefix argument MAKE-NULL, make it empty (NULL)."
   "Write the pending changes of this buffer in one transaction, then read again.
 If one row cannot be written (it was deleted meanwhile, say), nothing is."
   (interactive)
-  (let ((rel (qss-edit--relation))
-        (changed 0) (deleted 0))
+  (let* ((rel (qss-edit--relation))
+         (db (qss-relation-file rel))
+         (table (qss-sql--quote-table rel))
+         (where (qss-edit--key-where rel))
+         (changed 0) (deleted 0))
     (unless (qss-edit-pending-p) (user-error "No changes"))
-    (qss-sql--with-db db (qss-relation-file rel)
-      (with-sqlite-transaction db
-        (dolist (e (reverse qss-edit--changes))
-          (let ((id (qss-sql-rowid (car e)))
-                (table (qss-sql-quote (qss-relation-table rel))))
-            (cond
-             ((plist-get (cdr e) :delete)
-              (unless (eql 1 (sqlite-execute db (format "DELETE FROM %s WHERE rowid = ?" table)
-                                             (vector id)))
-                (error "Row %s is gone; nothing written" id))
-              (cl-incf deleted))
-             ((plist-get (cdr e) :set)
-              (let ((sets (reverse (plist-get (cdr e) :set))))
-                (unless (eql 1 (sqlite-execute
-                                db (format "UPDATE %s SET %s WHERE rowid = ?" table
-                                           (mapconcat (lambda (s)
-                                                        (format "%s = ?" (qss-sql-quote
-                                                                          (nth 1 (qss-edit--column rel (car s))))))
-                                                      sets ", "))
-                                (vconcat (mapcar (lambda (s) (qss-edit--value (qss-edit--column rel (car s))
-                                                                              (cdr s)))
-                                                 sets)
-                                         (list id))))
-                  (error "Row %s is gone; nothing written" id))
-                (cl-incf changed))))))))
+    (qss-sql-db-call-in-transaction
+     db
+     (lambda (exec)
+       (dolist (e (reverse qss-edit--changes))
+         (let* ((id (qss-edit--key-values (car e)))
+                (shown (if (cdr id) id (car id))))
+           (cond
+            ((plist-get (cdr e) :delete)
+             (unless (eql 1 (funcall exec (format "DELETE FROM %s WHERE %s" table where) id))
+               (error "Row %s is gone; nothing written" shown))
+             (cl-incf deleted))
+            ((plist-get (cdr e) :set)
+             (let ((sets (reverse (plist-get (cdr e) :set))))
+               (unless (or (eql 1 (funcall
+                                   exec (format "UPDATE %s SET %s WHERE %s" table
+                                                (mapconcat (lambda (s)
+                                                             (format "%s = ?" (qss-sql-quote
+                                                                               (nth 1 (qss-edit--column rel (car s))))))
+                                                           sets ", ")
+                                                where)
+                                   (append (mapcar (lambda (s) (qss-edit--value (qss-edit--column rel (car s))
+                                                                                (cdr s) db))
+                                                   sets)
+                                           id)))
+                           ;; MariaDB/MySQL count only rows whose values
+                           ;; changed: 0 for the same value again
+                           (and (not (stringp db))
+                                (qss-edit--row-exists-p db table where id)))
+                 (error "Row %s is gone; nothing written" shown))
+               (cl-incf changed))))))))
     (setq qss-edit--changes nil)
     (qss-edit--redisplay)
     (qss-refresh)

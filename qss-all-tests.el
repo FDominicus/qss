@@ -22,8 +22,10 @@
 
 (let* ((dir (directory-file-name (file-name-directory (or load-file-name buffer-file-name))))
        (parent (file-name-directory dir)))
+  ;; a package directory holds the file of its name: qss-odbc/qss-odbc.el
   (dolist (d (directory-files parent t "\\`qss"))
-    (when (file-directory-p d)
+    (when (and (file-directory-p d)
+               (file-exists-p (expand-file-name (concat (file-name-nondirectory d) ".el") d)))
       (add-to-list 'load-path d t))))
 
 (require 'qss)

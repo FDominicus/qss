@@ -413,19 +413,40 @@ connection string. The calls into ODBC come from the package
 a library that stand alone; it is loaded on first use, and without it
 qss works as before.
 
-Tested with PostgreSQL (psqlODBC, Unicode and ANSI) and SQLite (SQLite3
-ODBC); all shared cases of `spec/cases.sexp` pass on both. Other
-databases get standard SQL as PostgreSQL has it; SQL Server, Access and
-MySQL need dialects of their own (`TOP`, quoting). Text compares by code
-points as in SQLite and memory, whatever the collation of the database
-(PostgreSQL: `COLLATE "C"`). NUMERIC values with digits after the point
-are floats in tables; conditions are SQL and compare exactly. Editing
-rows works on SQLite files only.
+Options after the table: `:user` and `:password` (otherwise those of
+the DSN), `:schema` (otherwise the current one). A table of another
+schema can also be named `"schema.table"`.
+
+The words mean the same everywhere; the dialect decides the SQL:
+
+| | PostgreSQL, standard SQL | MariaDB, MySQL |
+|---|---|---|
+| names | `"name"` | `"name"` (`ANSI_QUOTES` per session) |
+| `=` with NULL | `IS NOT DISTINCT FROM` | `<=>` |
+| text by code points | `COLLATE "C"` | `CAST(… AS BINARY)` |
+| `like`, ASCII case folded | `translate(…)` | `REPLACE` + `utf8mb4_bin` |
+| ties in `sort-by` | `ctid` | the invisible column `_qss_rowid` |
+
+Tested with PostgreSQL 16 (psqlODBC, Unicode and ANSI, also a database
+that sorts by German rules), MariaDB 10.11 (Connector/ODBC 3.1.15) and
+SQLite (SQLite3 ODBC); all 71 shared cases of `spec/cases.sexp` pass on
+each. Other databases get standard SQL as PostgreSQL has it; SQL Server
+and Access need dialects of their own (`TOP`, quoting). Text compares by
+code points as in SQLite and memory, whatever the collation of the
+database. NUMERIC values with digits after the point are floats in
+tables; conditions are SQL and compare exactly.
+
+`into odbc` creates the table if it is missing, with types of the
+database (dates as `TIMESTAMP`, on MariaDB `DATETIME(6)`; long text as
+`LONGTEXT` there), and appends otherwise. On MariaDB it gets the
+invisible key `_qss_rowid`, so its rows can be changed and keep their
+order.
 
 ### Changing rows
 
-SQLite is a file to work in, not only to read. In a table buffer of an
-SQLite table (`[buffer]` after a table in the REPL):
+A database is a place to work in, not only to read. In a table buffer of
+a database table — SQLite or ODBC (`[buffer]` after a table in the
+REPL):
 
 | Key | |
 |---|---|
@@ -450,9 +471,10 @@ qss> (sqlite (qss-demo-database) "Orders") (where (= :status "cancelled")) (dele
 
 Only the rows of the query change: its `where`, `first` and `sort-by`
 count. Without a `where` or `first` they refuse to touch every row,
-unless `:all-rows t` says so. Rows are found by their rowid, so only
-queries straight on a table can be changed — not views, joins or
-groups.
+unless `:all-rows t` says so. Rows are found by their key — the rowid in
+SQLite, the primary key or `_qss_rowid` over ODBC — so only queries
+straight on a table with a key can be changed: not views, joins or
+groups. The same works over ODBC (`(odbc "test" "orders")`).
 
 Column and table names become keys mechanically: `OrderDate` →
 `order-date`, `HT_Orders` → `ht-orders`, `Straße` → `strasse`.
@@ -763,15 +785,15 @@ qss: every question is an ordinary pipe, `(xref "calls")` a source, and
 
 ## Manual
 
-`doc/qss-manual.pdf` is a short manual (about 25 pages): the ideas and
+`doc/qss-manual.pdf` is a short manual (about 30 pages): the ideas and
 how they fit together, presentations and accept in detail, contracts,
-a complete row type of one's own, and a reference written from the
+a complete row type of one's own, ODBC databases, and a reference written from the
 code. Build it with `M-x qss-manual-build` (load
 `doc/qss-manual-reference.el` first) or by hand:
 
 ```
 cd doc
-emacs --batch -L .. -L . -l qss-manual-reference.el -f qss-manual-write-reference
+emacs --batch -L .. -L ../../qss-contract -L ../../qss-odbc -L . -l qss-manual-reference.el -f qss-manual-write-reference
 lualatex qss-manual.tex && lualatex qss-manual.tex
 ```
 

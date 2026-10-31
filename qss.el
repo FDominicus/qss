@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.19.1
+;; Version: 0.20.0
 ;; Package-Requires: ((emacs "29.1") (qss-contract "0.1.0"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -138,14 +138,23 @@ does), so a test that hangs is the last line on the screen."
   "The directory of qss and those of the qss packages next to it.
 The packages lie side by side (~/.emacs.d/lib/qss/qss,
 ~/.emacs.d/lib/qss/qss-odbc ...); a directory counts if its name
-starts with qss."
+starts with qss and it holds the file of that name (qss-odbc.el)."
   (let* ((dir (directory-file-name (file-name-directory (locate-library "qss"))))
          (parent (file-name-directory dir)))
     (cons (file-name-as-directory dir)
           (mapcar #'file-name-as-directory
-                  (seq-filter (lambda (d) (and (file-directory-p d)
-                                               (not (file-equal-p d dir))))
+                  (seq-filter (lambda (d) (and (not (file-equal-p d dir))
+                                               (qss--package-directory-p d)))
                               (directory-files parent t "\\`qss"))))))
+
+(defun qss--package-directory-p (dir)
+  "Return non-nil if DIR holds a package of its own name: qss-odbc/qss-odbc.el.
+So a copy beside it (qss-old, qss-backup) does not count."
+  (and (file-directory-p dir)
+       (file-exists-p (expand-file-name (concat (file-name-nondirectory
+                                                 (directory-file-name dir))
+                                                ".el")
+                                        dir))))
 
 (defun qss--load-all-tests ()
   "Load the tests of qss and of the qss packages next to it.

@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.19.0.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.20.0.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -176,7 +176,7 @@ The 54 functions of the interface with their contracts, as \file{qss-interface.e
 \code{qss-nu} & \code{(-\textgreater{} stringp any)} \\
 \code{qss-nu-pipe} & \code{(-\textgreater{} qss-tabular stringp any)} \\
 \code{qss-nuon-read} & \code{(-\textgreater{} stringp any)} \\
-\code{qss-odbc-source} & \code{(-\textgreater{} stringp (opt (or/c stringp symbolp)) (or/c qss-relation-p qss-table-p))} \\
+\code{qss-odbc-source} & \code{(-\textgreater{} stringp (opt (or/c stringp symbolp)) (rest any) (or/c qss-relation-p qss-table-p))} \\
 \code{qss-present} & \code{(-\textgreater{} any (opt qss-presentation-type-name) (opt stringp) any)} \\
 \code{qss-presentation-label}\newline\emph{generic} & \code{(-\textgreater{} any stringp)} \\
 \code{qss-presentation-parse} & \code{(-\textgreater{} qss-presentation-type-name stringp any)} \\
@@ -191,7 +191,7 @@ The 54 functions of the interface with their contracts, as \file{qss-interface.e
 \code{qss-sql} & \code{(-\textgreater{} any stringp)} \\
 \code{qss-sql-name-key} & \code{(-\textgreater{} stringp symbolp)} \\
 \code{qss-sql-relation} & \code{(-\textgreater{} any (or/c stringp symbolp) qss-relation-p)} \\
-\code{qss-sql-rowid} & \code{(-\textgreater{} any (or/c null integerp))} \\
+\code{qss-sql-rowid} & \code{(-\textgreater{} any (or/c null integerp list))} \\
 \code{qss-sql-schema} & \code{(-\textgreater{} stringp (listof (cons/c stringp list)))} \\
 \code{qss-sql-write} & \code{(-\textgreater{} qss-table-p stringp stringp (opt (one-of replace append)) natnump)} \\
 \code{qss-sqlite} & \code{(-\textgreater{} stringp (opt (or/c stringp symbolp)) qss-relation-p)} \\

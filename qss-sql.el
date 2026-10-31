@@ -182,7 +182,8 @@ sort-by, as the input order does in memory.")
 (cl-defgeneric qss-sql-db-dialect (db)
   "Return the SQL dialect of DB, a property list.
 :true :false   conditions that are always true or false
-:is :is-not    = and /= that treat NULL as a value
+:is :is-not    = and /= that treat NULL as a value: an operator (\"IS\"),
+               or a format with two %s (\"NOT (%s <=> %s)\")
 :null-last     format for ORDER BY ascending with NULL last (column twice)
 :null-first-desc  the same descending, NULL first
 :like          format for (LEFT LIKE PATTERN), case folded in ASCII only
@@ -195,6 +196,39 @@ sort-by, as the input order does in memory.")
 (cl-defgeneric qss-sql-db-rows (db rel run keys)
   "Return the rows of the query RUN (made from REL) in DB as property lists.
 KEYS are the keywords of the columns of REL.")
+
+(cl-defgeneric qss-sql-db-key (db table)
+  "Return the SQL of the columns that identify a row of TABLE in DB, a list.
+Nil if rows cannot be told apart (a view, a table without key).
+SQLite: (\"rowid\").  Editing (qss-edit.el) finds rows by it.")
+
+(cl-defgeneric qss-sql-db-call-in-transaction (db fn)
+  "Call FN with one argument, a function (SQL PARAMS) -> rows changed,
+all in one transaction of DB: committed if FN returns, rolled back if it
+exits otherwise.  Return what FN returns.")
+
+(cl-defmethod qss-sql-db-key ((db string) table)
+  "SQLite: rowid of a real table."
+  (let ((id (qss-sql-db-order-id db table)))
+    (and id (list id))))
+
+(cl-defmethod qss-sql-db-call-in-transaction ((db string) fn)
+  "SQLite: the file DB."
+  (qss-sql--with-db d db
+    (with-sqlite-transaction d
+      (funcall fn (lambda (sql params) (sqlite-execute d sql (vconcat params)))))))
+
+(cl-defgeneric qss-sql-db-quote-table (db name)
+  "Return the table NAME of DB quoted for SQL.
+SQLite: one identifier.  Other databases may know NAME as schema.table.")
+
+(cl-defmethod qss-sql-db-quote-table ((_db string) name)
+  "SQLite: NAME is one identifier, dots and all."
+  (qss-sql-quote name))
+
+(defun qss-sql--quote-table (rel)
+  "The table of the query REL, quoted for SQL."
+  (qss-sql-db-quote-table (qss-relation-file rel) (qss-relation-table rel)))
 
 (defconst qss-sql--sqlite-dialect
   '(:true "1" :false "0" :is "IS" :is-not "IS NOT"
@@ -493,7 +527,10 @@ numbers where `qss-sql--quantities-p' says so."
                         (setq left (qss-sql--binary
                                     rel left (nth 2 (assq (qss--name (nth 1 f))
                                                           (qss-relation-columns rel))))))
-                      (format "(%s %s %s)" left op (render (nth 2 f)))))))))))
+                      (if (string-search "%s" op)
+                          (let ((right (render (nth 2 f))))
+                            (concat "(" (format op left right) ")"))
+                        (format "(%s %s %s)" left op (render (nth 2 f))))))))))))
       (let ((sql (render template)))
         (cons sql (cdr params))))))
 
@@ -506,7 +543,7 @@ SELECT, if given, replaces the list of columns (e.g. \"rowid\")."
                       ((qss-relation-source rel))))
          (from (if inner
                    (format "(\n%s\n) AS t" (replace-regexp-in-string "^" "  " (car inner)))
-                 (qss-sql-quote (qss-relation-table rel))))
+                 (qss-sql--quote-table rel)))
          (wheres (qss-relation-wheres rel))
          (order (qss-relation-order rel))
          (limit (qss-relation-limit rel))
@@ -541,7 +578,9 @@ SELECT, if given, replaces the list of columns (e.g. \"rowid\")."
 Editing (qss-edit.el) and `qss-sql-rowid' use it.")
 
 (defun qss-sql-rowid (row)
-  "Return the rowid of ROW, fetched from an SQLite table, or nil."
+  "Return what identifies ROW in its table, or nil.
+For a row of an SQLite table its rowid; for other databases the list of
+the values of the key (`qss-sql-db-key'): the primary key, ctid ..."
   (gethash row qss-sql--rowids))
 
 (defun qss-sql--direct-p (rel)

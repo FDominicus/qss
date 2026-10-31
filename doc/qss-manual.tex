@@ -504,6 +504,108 @@ Rows are found by their rowid. So only queries straight on a table can be
 changed --- not views, joins or groups; \qss{} says so instead of guessing.
 
 % ======================================================================
+\chapter{ODBC databases}\label{chap:odbc}
+
+Any database with an ODBC driver is a source like SQLite, with the same words.
+The pipe stays a query and becomes SQL in the dialect of the database:
+
+\begin{Verbatim}
+(qss-> (odbc "test"))                        ; the tables of the DSN test
+(qss-> (odbc "test" "orders")
+       (where (> :amount 100))
+       (sort-by order-date :desc)
+       (first 20))
+\end{Verbatim}
+
+\code{"test"} is a data source name (\kbd{odbcinst -q -s} lists them) or a
+full connection string. The calls into ODBC come from the package
+\file{qss-odbc}: a small C module and a library, built once with
+\kbd{M-x qss-odbc-build-module}. It is loaded on first use; without it \qss{}
+works as before, and \code{(odbc \ldots)} says what is missing.
+
+\section{Logging in and schemas}
+
+User and password come from the DSN, from the files of the driver
+(\file{\textasciitilde/.pgpass}), or are given:
+
+\begin{Verbatim}
+(odbc "Driver={PostgreSQL Unicode};Server=db;Database=shop" "orders"
+      :user "frido" :password (read-passwd "Password: "))
+\end{Verbatim}
+
+One connection per DSN is kept; \kbd{M-x qss-odbc-close} closes them. The
+names of tables and columns are read once; \kbd{M-x qss-odbc-refresh} reads
+them again (\code{into} does that by itself). A PostgreSQL table outside the
+current schema is \code{"schema.table"}: \code{(odbc "test" "stock.items")},
+written \code{"stock"."items"} in SQL; tables of the same name in two schemas
+stay apart.
+
+\section{The same meaning everywhere}
+
+The words mean the same in memory, in SQLite and in every database; the SQL
+differs. All cases of \file{spec/cases.sexp} pass on PostgreSQL, MariaDB and
+SQLite through ODBC.
+
+\noindent\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Meaning} & \textbf{PostgreSQL (standard SQL)} & \textbf{MariaDB, MySQL} \\
+\midrule
+\code{=} with NULL as a value & \code{IS NOT DISTINCT FROM} & \code{<=>} \\
+\code{like} folds ASCII only & \code{translate(\ldots)} on both sides &
+  26 \code{REPLACE}, then \code{utf8mb4\_bin} \\
+text by code points & \code{COLLATE "C"} & \code{CAST(\ldots{} AS BINARY)} \\
+NULL last, first descending & \multicolumn{2}{l}{\code{CASE WHEN x IS NULL THEN 1 ELSE 0 END}} \\
+order of input (ties) & \code{ctid} & hidden \code{\_qss\_rowid} \\
+identifiers & \code{"name"} & \code{"name"} (\code{ANSI\_QUOTES} per session) \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+Text compares by code points whatever the collation of the database: a
+database that sorts by German rules (\emph{Anna, Ärger, bert, Carla}) still
+gives \emph{Anna, Carla, bert, Ärger}, as SQLite and memory do. Other
+databases get standard SQL; SQL Server and Access need a dialect of their own
+(\code{TOP}, \code{[name]}), not there yet.
+
+\section{Storing and changing rows}
+
+\code{(into odbc "test" "big\_files")} stores a table as in SQLite
+(\ref{sec:into}): integers as \code{BIGINT}, other numbers as \code{DOUBLE
+PRECISION}, times as \code{TIMESTAMP} (MariaDB \code{DATETIME}), text as
+\code{TEXT} (MariaDB \code{LONGTEXT}). On MariaDB and MySQL the table gets a
+hidden column \code{\_qss\_rowid} (\code{AUTO\_INCREMENT \ldots{} INVISIBLE}):
+\code{SELECT *} does not show it, but it keeps the order of input and tells
+the rows apart.
+
+Rows change as in SQLite (\ref{sec:changing}): \kbd{e}, \kbd{d}, \kbd{u} and
+\kbd{C-c C-c} in a table buffer, \code{update-rows} and \code{delete-rows} in
+a pipe, each in one transaction. A row is found by the primary key; without
+one, by \code{ctid} on PostgreSQL (a row changed by someone else meanwhile is
+then \emph{gone}, and nothing is written) and by \code{\_qss\_rowid} on
+MariaDB. A view, or a table without any of these, cannot be changed.
+
+\section{Values}
+
+In tables, \code{NUMERIC} with digits after the point becomes a float (an
+\code{avg()} on PostgreSQL has twenty of them); conditions are SQL and compare
+exactly. Exact values come from the library: \code{qss-odbc-select} gives
+\code{NUMERIC(10,2)} 1094.80 as the integer \code{109480} with the scale in
+the column. Dates and times come as text, the wall clock as stored. MariaDB
+has no boolean: \code{BOOLEAN} is \code{TINYINT(1)} and comes as 1 or 0.
+
+\section{Tests}
+
+The ODBC tests run against the data sources in the environment variable
+\code{QSS\_ODBC\_DSNS} (default \code{test}) and create and drop tables
+\code{qss\_spec\_*} and \code{qss\_sql\_odbc\_t} there --- never point them
+at a database that matters:
+
+\begin{Verbatim}
+QSS_ODBC_DSNS="test mytest" emacs -Q --batch -L .../qss \
+  -l qss-all-tests -f qss-run-all-tests-batch
+\end{Verbatim}
+
+% ======================================================================
 \chapter{Nushell}\label{sec:nushell}
 
 \code{(nu \emph{command})} is a source: Nushell runs the command in
@@ -891,7 +993,7 @@ Little in \qss{} is new; it puts old ideas together in Emacs.
 \file{qss-menu.el} & actions at point, \kbd{a}, the right mouse button, \kbd{w} \\
 \file{qss-edit.el} & changing rows of SQLite tables; \code{update-rows}, \code{delete-rows} \\
 \file{qss-repl.el} & \kbd{M-x qss} \\
-\file{qss-sql-odbc.el} & ODBC databases as a source and a store (with the package qss-odbc) \\
+\file{qss-sql-odbc.el} & ODBC databases as a source and a store, chapter~\ref{chap:odbc} (with the package qss-odbc) \\
 \file{qss-interface.el} & the interface of \qss{} with its contracts \\
 \file{qss-examples.el} & \kbd{M-x qss-examples} \\
 \file{doc/} & this manual, its example and the writer of its reference \\
