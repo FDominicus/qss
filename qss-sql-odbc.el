@@ -46,6 +46,7 @@
     (user-error "ODBC needs the package qss-odbc (https://github.com/FDominicus/qss-odbc)")))
 
 (declare-function qss-odbc-connect "qss-odbc")
+(declare-function qss-odbc-decimal "qss-odbc")
 (declare-function qss-odbc-connected-p "qss-odbc")
 (declare-function qss-odbc-disconnect "qss-odbc")
 (declare-function qss-odbc-execute "qss-odbc")
@@ -179,7 +180,10 @@ For databases without translate(): 26 nested REPLACE."
                       (qss-sql-odbc--ascii-fold "CONVERT(%s USING utf8mb4)")
                       (qss-sql-odbc--ascii-fold "CONVERT(%s USING utf8mb4)"))
         ;; the bytes of UTF-8 sort as the code points
-        :binary-text "CAST(%s AS BINARY)")
+        :binary-text "CAST(%s AS BINARY)"
+        ;; AVG of DECIMAL has 4 more digits than the column (1.039554);
+        ;; memory and the others compute in double
+        :avg "CAST(%s AS DOUBLE)")
   "MariaDB and MySQL; identifiers in double quotes need ANSI_QUOTES, which
 every connection sets (`qss-sql-odbc--connection').")
 
@@ -197,11 +201,28 @@ others standard SQL."
   "The DSN."
   (qss-sql-odbc-dsn db))
 
-(cl-defmethod qss-sql-db-value ((_db qss-sql-odbc) value)
+(defun qss-sql-odbc--float-parameter (x)
+  "The float X as the exact decimal Emacs writes for it (0.99), or X.
+psqlODBC sends a double as text of 17 digits without a type,
+\"0.98999999999999999\", and PostgreSQL compares that exactly with a
+NUMERIC column: (= :price 0.99) found nothing.  The shortest decimal that
+reads back as X means the same number and compares as written."
+  (let ((s (number-to-string x)))
+    (if (string-match "\\`\\(-?\\)\\([0-9]+\\)\\.\\([0-9]+\\)\\'" s)
+        (let ((frac (match-string 3 s)))
+          (qss-odbc-decimal (* (if (equal (match-string 1 s) "-") -1 1)
+                               (string-to-number (concat (match-string 2 s) frac)))
+                            (length frac)))
+      x)))                              ; 1e+20, NaN, infinity: as a double
+
+(cl-defmethod qss-sql-db-value ((db qss-sql-odbc) value)
   "Times as text (PostgreSQL compares text with DATE and TIMESTAMP), symbols
-by name; t stays t (a BOOLEAN)."
+by name; t stays t (a BOOLEAN); floats as exact decimals, except in SQLite
+(see `qss-sql-odbc--float-parameter')."
   (cond ((qss--time-p value) (format-time-string qss-time-format value))
         ((and (symbolp value) value (not (eq value t))) (symbol-name value))
+        ((and (floatp value) (not (qss-sql-odbc--sqlite-p db)))
+         (qss-sql-odbc--float-parameter value))
         (t value)))
 
 (defun qss-sql-odbc--value (raw col)
@@ -295,6 +316,18 @@ a view or a table without key."
   (when (string-match-p "postgres" (qss-sql-odbc--dbms db))
     (caar (cdr (qss-odbc-query (qss-sql-odbc--connection db) "SELECT current_schema()")))))
 
+(defun qss-sql-odbc--tables (db type)
+  "The catalog rows of the tables of TYPE (\"TABLE\", \"VIEW\") of DB.
+MariaDB/MySQL list the tables of every database the user may see; only
+those of the current one count (a database there is what a schema is
+elsewhere)."
+  (let ((rows (qss-odbc-tables (qss-sql-odbc--connection db) type)))
+    (if (qss-sql-odbc--mysql-p db)
+        (let ((current (caar (cdr (qss-odbc-query (qss-sql-odbc--connection db)
+                                                   "SELECT DATABASE()")))))
+          (seq-filter (lambda (r) (equal (plist-get r :table_cat) current)) rows))
+      rows)))
+
 (cl-defmethod qss-sql-db-quote-table ((db qss-sql-odbc) name)
   "A table outside the current schema as \"schema\".\"table\"."
   (let ((kind (qss-sql-odbc--kind db name)))
@@ -326,7 +359,7 @@ A table outside the current schema (PostgreSQL) is named SCHEMA.TABLE."
              (rows (cl-remove-if
                     (lambda (r) (or (equal (plist-get r :table_name) qss-sql--types-table)
                                     (string-prefix-p "sqlite_" (plist-get r :table_name))))
-                    (append (qss-odbc-tables con "TABLE") (qss-odbc-tables con "VIEW"))))
+                    (append (qss-sql-odbc--tables db "TABLE") (qss-sql-odbc--tables db "VIEW"))))
              (qss-types (qss-sql-odbc--read-types db))
              (kinds
               (mapcar (lambda (r)
@@ -363,7 +396,7 @@ A table outside the current schema (PostgreSQL) is named SCHEMA.TABLE."
   "The qss types recorded by `into' in DB: ((TABLE . COLUMN) . TYPE) ..."
   (let ((con (qss-sql-odbc--connection db)))
     (when (cl-some (lambda (r) (equal (plist-get r :table_name) qss-sql--types-table))
-                   (qss-odbc-tables con "TABLE"))
+                   (qss-sql-odbc--tables db "TABLE"))
       (mapcar (lambda (row) (cons (cons (downcase (nth 0 row)) (nth 1 row)) (intern (nth 2 row))))
               (cdr (qss-odbc-query con (format "SELECT \"table\", \"column\", \"type\" FROM %s"
                                                (qss-sql-quote qss-sql--types-table))))))))
@@ -416,7 +449,7 @@ types of the columns are recorded.  Return the number of rows written."
          (tables (mapcar (lambda (r) (plist-get r :table_name))
                          (seq-filter (lambda (r) (or (null current)
                                                      (equal (plist-get r :table_schem) current)))
-                                     (qss-odbc-tables con "TABLE"))))
+                                     (qss-sql-odbc--tables db "TABLE"))))
          (exists (cl-find name tables :test #'string-equal-ignore-case)))
     (unless specs (user-error "Nothing to store: the table has no columns"))
     (when (and exists (null mode))

@@ -188,7 +188,9 @@ sort-by, as the input order does in memory.")
 :null-first-desc  the same descending, NULL first
 :like          format for (LEFT LIKE PATTERN), case folded in ASCII only
 :binary-text   format that makes a text column compare by code points,
-               as SQLite and memory do, or nil if it does already")
+               as SQLite and memory do, or nil if it does already
+:avg           format for the argument of AVG, or nil: MariaDB/MySQL
+               round the average of DECIMAL to 4 more digits")
 
 (cl-defgeneric qss-sql-db-value (db value)
   "Return the Lisp VALUE as a parameter for DB.")
@@ -837,9 +839,12 @@ The rows are groups (`qss-group') whose rows a query of their own fetches."
   (dolist (a aggs) (qss-sql--column rel (nth 1 a)))
   (let* ((col (lambda (k) (qss-sql--column rel k)))
          (type-of-col (lambda (k) (assq k (qss-relation-columns rel))))
+         (avg-fmt (qss-sql--dialect rel :avg))
          (agg-sql (lambda (a)
-                    (format "%s(%s) AS %s" (upcase (symbol-name (car a))) (funcall col (nth 1 a))
-                            (qss-sql-quote (symbol-name (nth 2 a))))))
+                    (let ((arg (funcall col (nth 1 a))))
+                      (format "%s(%s) AS %s" (upcase (symbol-name (car a)))
+                              (if (and avg-fmt (eq (car a) 'avg)) (format avg-fmt arg) arg)
+                              (qss-sql-quote (symbol-name (nth 2 a)))))))
          (agg-type (lambda (a)
                      (let* ((c (funcall type-of-col (nth 1 a)))
                             (qtype (nth 3 c))

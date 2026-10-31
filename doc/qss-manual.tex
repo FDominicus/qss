@@ -538,7 +538,9 @@ names of tables and columns are read once; \kbd{M-x qss-odbc-refresh} reads
 them again (\code{into} does that by itself). A PostgreSQL table outside the
 current schema is \code{"schema.table"}: \code{(odbc "test" "stock.items")},
 written \code{"stock"."items"} in SQL; tables of the same name in two schemas
-stay apart.
+stay apart. On MariaDB and MySQL a database is what a schema is elsewhere; the
+driver lists the tables of all of them, qss takes those of the database of the
+DSN.
 
 \section{The same meaning everywhere}
 
@@ -548,7 +550,7 @@ SQLite through ODBC.
 
 \noindent\begin{tabularx}{\linewidth}{@{}lXX@{}}
 \toprule
-\textbf{Meaning} & \textbf{PostgreSQL (standard SQL)} & \textbf{MariaDB, MySQL} \\
+\textbf{Meaning} & \textbf{PostgreSQL} & \textbf{MariaDB, MySQL} \\
 \midrule
 \code{=} with NULL as a value & \code{IS NOT DISTINCT FROM} & \code{<=>} \\
 \code{like} folds ASCII only & \code{translate(\ldots)} on both sides &
@@ -556,7 +558,8 @@ SQLite through ODBC.
 text by code points & \code{COLLATE "C"} & \code{CAST(\ldots{} AS BINARY)} \\
 NULL last, first descending & \multicolumn{2}{l}{\code{CASE WHEN x IS NULL THEN 1 ELSE 0 END}} \\
 order of input (ties) & \code{ctid} & hidden \code{\_qss\_rowid} \\
-identifiers & \code{"name"} & \code{"name"} (\code{ANSI\_QUOTES} per session) \\
+\code{avg} & \code{AVG(\ldots)} & \code{AVG(CAST(\ldots{} AS DOUBLE))} \\
+identifiers & \code{"name"} & \code{"name"}, \code{ANSI\_QUOTES} \\
 \bottomrule
 \end{tabularx}
 
@@ -588,7 +591,10 @@ MariaDB. A view, or a table without any of these, cannot be changed.
 
 In tables, \code{NUMERIC} with digits after the point becomes a float (an
 \code{avg()} on PostgreSQL has twenty of them); conditions are SQL and compare
-exactly. Exact values come from the library: \code{qss-odbc-select} gives
+exactly. A float in a condition goes to the database as the decimal Emacs
+writes for it: \code{(= :price 0.99)} finds 0.99 in a \code{NUMERIC} column
+(psqlODBC would send \code{0.98999999999999999}, which is not 0.99). Exact
+values come from the library: \code{qss-odbc-select} gives
 \code{NUMERIC(10,2)} 1094.80 as the integer \code{109480} with the scale in
 the column. Dates and times come as text, the wall clock as stored. MariaDB
 has no boolean: \code{BOOLEAN} is \code{TINYINT(1)} and comes as 1 or 0.
@@ -604,6 +610,13 @@ at a database that matters:
 QSS_ODBC_DSNS="test mytest" emacs -Q --batch -L .../qss \
   -l qss-all-tests -f qss-run-all-tests-batch
 \end{Verbatim}
+
+\file{qss-chinook-test.el} runs the same pipes on real data in every way and
+compares them with memory: the Chinook database (a music shop; MIT, in
+\file{test/chinook/}) in SQLite, in SQLite through ODBC, and in the
+databases of the DSNs in \code{QSS\_CHINOOK\_DSNS}, loaded once by hand from
+the scripts there. Table names differ (\code{InvoiceLine},
+\code{invoice\_line}), the keys of the columns do not.
 
 % ======================================================================
 \chapter{Nushell}\label{sec:nushell}

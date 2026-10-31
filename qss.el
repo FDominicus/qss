@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.20.0
+;; Version: 0.20.2
 ;; Package-Requires: ((emacs "29.1") (qss-contract "0.1.0"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -172,7 +172,10 @@ their library also in an Emacs started with -Q.  Return a list of
     ;; package may need another (qss-elisp-xref needs qss-contract)
     (dolist (dir (qss--package-directories))
       (dolist (file (directory-files dir t "\\`qss.*-test\\.el\\'"))
-        (load file nil t)))
+        ;; a test file may have required another already (ERT refuses a
+        ;; test defined twice)
+        (unless (featurep (intern (file-name-base file)))
+          (load file nil t))))
     (nreverse found)))
 
 ;;;###autoload

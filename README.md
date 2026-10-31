@@ -415,7 +415,9 @@ qss works as before.
 
 Options after the table: `:user` and `:password` (otherwise those of
 the DSN), `:schema` (otherwise the current one). A table of another
-schema can also be named `"schema.table"`.
+schema can also be named `"schema.table"`. On MariaDB and MySQL, where
+a database is what a schema is elsewhere, the tables are those of the
+database of the DSN.
 
 The words mean the same everywhere; the dialect decides the SQL:
 
@@ -426,6 +428,7 @@ The words mean the same everywhere; the dialect decides the SQL:
 | text by code points | `COLLATE "C"` | `CAST(… AS BINARY)` |
 | `like`, ASCII case folded | `translate(…)` | `REPLACE` + `utf8mb4_bin` |
 | ties in `sort-by` | `ctid` | the invisible column `_qss_rowid` |
+| `avg` | `AVG(…)` | `AVG(CAST(… AS DOUBLE))` (DECIMAL would round) |
 
 Tested with PostgreSQL 16 (psqlODBC, Unicode and ANSI, also a database
 that sorts by German rules), MariaDB 10.11 (Connector/ODBC 3.1.15) and
@@ -434,7 +437,10 @@ each. Other databases get standard SQL as PostgreSQL has it; SQL Server
 and Access need dialects of their own (`TOP`, quoting). Text compares by
 code points as in SQLite and memory, whatever the collation of the
 database. NUMERIC values with digits after the point are floats in
-tables; conditions are SQL and compare exactly.
+tables; conditions are SQL and compare exactly. A float in a condition
+goes to the database as the decimal Emacs writes for it, so
+`(= :price 0.99)` finds the prices of 0.99 in a NUMERIC column too
+(psqlODBC would send 0.98999999999999999).
 
 `into odbc` creates the table if it is missing, with types of the
 database (dates as `TIMESTAMP`, on MariaDB `DATETIME(6)`; long text as
@@ -841,6 +847,21 @@ drop the tables `qss_sql_odbc_t` and `qss_spec_*` there:
 
 ```
 QSS_ODBC_DSNS="test sqlitetest" emacs -Q --batch -L /path/to/qss -l qss-all-tests -f qss-run-all-tests-batch
+```
+
+One test runs the same pipes on real data in every way and compares
+them with memory: the
+[Chinook](https://github.com/lerocha/chinook-database) database (a music
+shop, MIT, in `test/chinook/`). SQLite and, if the driver `SQLite3` is
+installed, SQLite through ODBC are always compared; PostgreSQL and
+MariaDB when their DSNs are given in `QSS_CHINOOK_DSNS`. These databases
+are loaded once by hand from the scripts in `test/chinook/` (which begin
+with `DROP DATABASE`); the test only reads them:
+
+```
+sudo -u postgres psql < test/chinook/Chinook_PostgreSql.sql
+sudo mysql --default-character-set=utf8mb4 < test/chinook/Chinook_MySql.sql
+QSS_CHINOOK_DSNS="chinook_pg chinook_my" emacs -Q --batch -L /path/to/qss -l qss-all-tests -f qss-run-all-tests-batch
 ```
 
 The tests run with the contracts on, so every test is a check of the

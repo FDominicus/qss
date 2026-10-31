@@ -111,6 +111,32 @@ Use it directly in the body of `ert-deftest' (it uses `skip-unless')."
                            "DROP TABLE IF EXISTS qss_sql_odbc_t")
          (qss-odbc-refresh dsn)))))
 
+(ert-deftest qss-sql-odbc-exact-numbers ()
+  "Floats in conditions compare with NUMERIC as written; AVG as in memory.
+psqlODBC sent 0.99 as \"0.98999999999999999\", so (= :p 0.99) found
+nothing on NUMERIC(10,2); MariaDB rounded AVG of DECIMAL to 6 digits."
+  (qss-sql-odbc-test--each dsn
+     (let ((con (qss-sql-odbc-connection (qss-sql-odbc-database dsn))))
+       (qss-odbc-execute con "DROP TABLE IF EXISTS qss_sql_odbc_t")
+       (qss-odbc-execute con "CREATE TABLE qss_sql_odbc_t (id INTEGER PRIMARY KEY, p NUMERIC(10,2), d DOUBLE PRECISION)")
+       (qss-odbc-execute con "INSERT INTO qss_sql_odbc_t VALUES (1, 0.99, 0.99), (2, 2.00, 2.0), (3, 2.00, 2.0), (4, -0.10, -0.1)")
+       (qss-odbc-refresh dsn)
+       (unwind-protect
+           (let ((src (lambda () (qss-odbc-source dsn "qss_sql_odbc_t"))))
+             (should (equal (qss-collect (qss-> (funcall src) (where (= :p 0.99)) (get :id))) '(1)))
+             (should (equal (qss-collect (qss-> (funcall src) (where (= :d 0.99)) (get :id))) '(1)))
+             (should (equal (qss-collect (qss-> (funcall src) (where (= :p -0.1)) (get :id))) '(4)))
+             (should (equal (qss-collect (qss-> (funcall src) (where (> :p 0.99)) (sort-by :id) (get :id))) '(2 3)))
+             (should (equal (qss-collect (qss-> (funcall src) (where (< :p 1.5)) (sort-by :id) (get :id))) '(1 4)))
+             ;; (0.99 + 2 + 2 - 0.1) / 4 = 1.2225; without row 4: 4.99 / 3
+             (should (< (abs (- (car (qss-collect (qss-> (funcall src) (where (> :id 0)) (summarize (avg :p)) (get :avg-p))))
+                                1.2225))
+                        1e-12))
+             (should (< (abs (- (car (qss-collect (qss-> (funcall src) (where (< :id 4)) (summarize (avg :p)) (get :avg-p))))
+                                (/ 4.99 3)))
+                        1e-12)))
+         (qss-sql-odbc-test--drop dsn "qss_sql_odbc_t")))))
+
 ;;; Editing
 
 (defun qss-sql-odbc-test--sql (dsn sql &rest params)
