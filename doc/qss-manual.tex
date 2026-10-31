@@ -269,7 +269,7 @@ on. Any other name both sides have gets \code{\_} on the right side
 table except a join column both have --- so the right key of
 \code{:on (\emph{left} \emph{right})} is renamed too ---, as \code{join
 --suffix} in Nushell; or select only what is needed before:
-\code{(join (qss-> (xref "files") (select :id :path)) :on (:file-id :id))}.
+\code{(join (qss-> (sqlite "Customers") (select :customer-no :name)) :on :customer-no)}.
 As in Nushell, a missing value matches a missing value. The rows of a join are data (property lists). The options are
 data like column names: in a pipe they are not evaluated.
 
@@ -837,240 +837,6 @@ returned something that is not a list of columns, the message would have named
 the method for \code{my-library}.
 
 % ======================================================================
-\chapter{A cross reference of Emacs Lisp}\label{chap:xref}
-
-\file{qss-elisp-xref.el} makes a database of all Emacs Lisp it finds: the Lisp
-of Emacs itself and the installed packages. Every definition, every use of a
-name with what it is there, every call after macro expansion --- for code that
-is loaded or not, in files compressed or not. It is the hardest test \qss{} has
-had: three million rows, and every question an ordinary pipe.
-
-\section{Building it}
-
-\begin{Verbatim}
-M-x qss-elisp-xref-index
-\end{Verbatim}
-
-Two steps, each in an Emacs of its own in the background; the messages are in
-the buffer \code{*qss-elisp-xref*}. From a shell:
-
-\begin{Verbatim}
-emacs --batch -L ~/.emacs.d/lib/qss -l qss-elisp-xref -f qss-elisp-xref-batch [DIR...]
-emacs --batch -L ~/.emacs.d/lib/qss -l qss-elisp-xref -f qss-elisp-xref-calls-batch
-\end{Verbatim}
-
-Without directories they take the Lisp of the running Emacs and
-\code{package-user-dir}. The batch Emacs does not read the init file, so it
-does not know a \code{package-user-dir} or \code{qss-data-directory} set
-there: give the package directory as an argument, and the file with
-\code{-{}-eval '(setq qss-elisp-xref-database "\ldots")'} before \code{-f}, in
-both steps. \kbd{M-x qss-elisp-xref-index} passes both on by itself.
-
-\begin{enumerate}
-\item \textbf{Reading.} The Lisp reader with the position of every symbol
-  (\code{read-positioning-symbols}); nothing is loaded or run. Each top-level
-  form is walked: definitions, symbols with their context, strings.
-\item \textbf{Compiling.} Each file is compiled into a directory thrown away;
-  the byte compiler's call tree gives the calls after macro expansion. A
-  \code{when} is gone, the \code{message} inside it stays.
-\end{enumerate}
-
-Each file is one transaction, and only one file is in memory at a time; a run
-broken off loses nothing. The next run reads only files that changed (by their
-SHA-1) and drops files that are gone. A question in a batch run (a coding
-system, say) becomes an error of that file instead of waiting for ever.
-
-The database is \file{elisp-xref.sqlite3} in \code{qss-data-directory}.
-Over the Lisp of Emacs 29.3 (Debian) it held:
-
-\noindent\begin{tabularx}{\linewidth}{@{}lrX@{}}
-\toprule
-\textbf{Table} & \textbf{Rows} & \textbf{One row per} \\
-\midrule
-\code{files} & 1\,626 & file: library, origin (emacs, elpa, user), package and version, Commentary, SHA-1, error \\
-\code{forms} & 100\,543 & top-level form, with its source text and its first and last line \\
-\code{definitions} & 80\,119 & defun, defmacro, defvar, defcustom, cl-defgeneric, cl-defmethod (with specializers), cl-defstruct, local cl-flet and cl-labels \ldots: arglist, whole docstring, interactive; also the primitives of C \\
-\code{occurrences} & 2\,976\,276 & symbol or string (not docstrings, not numbers): line, column, context, the function around it and the argument place \\
-\code{calls} & 257\,912 & caller and callee after macro expansion \\
-\code{compiled} & 1\,626 & which files were compiled, and why not \\
-\code{summaries} & 49\,789 & callable name: kind, arglist, first docstring line, uses, files \\
-\code{categories} & 6\,769 & name and category (string, list, buffer \ldots), and why \\
-\bottomrule
-\end{tabularx}
-
-Reading took 2\,min 28\,s, compiling 1\,min 45\,s (two cores of a 2.1\,GHz
-Xeon, in a virtual machine); the file is 430\,MB. 31 files say
-\code{no-byte-compile}; all others compiled.
-
-The context of a symbol tells what it is there: \code{head} (called),
-\code{macro-use}, \code{special-form}, \code{function} (\code{\#'f}),
-\code{quoted}, \code{defining}, \code{parameter}, \code{binding}, \code{other},
-or \code{string}. The strings with their \code{parent\_head} are all the texts a
-program shows to people --- a start for a translation.
-
-\section{Asking it from the keyboard}
-
-\code{qss-xref-mode} makes the database a backend of xref, the cross references
-built into Emacs. The keys are the usual ones:
-
-\noindent\begin{tabularx}{\linewidth}{@{}lX@{}}
-\toprule
-\kbd{M-.} & to the definition; a generic function lists its methods with their specializers \\
-\kbd{M-?} & every use in code (not in strings, comments or docstrings), each with its line \\
-\kbd{C-M-.} & definitions by parts of the name: \code{sample size} finds \code{sample-size} \\
-\kbd{M-,} & back \\
-\bottomrule
-\end{tabularx}
-
-\begin{lstlisting}
-(add-hook 'emacs-lisp-mode-hook #'qss-xref-mode)
-\end{lstlisting}
-
-Where the database knows nothing --- code not indexed yet, the C source of a
-primitive --- Emacs' own Elisp backend answers (\code{qss-xref-fallback}). The
-tables of the questions below have the mode on as well, so \kbd{M-.} works on a
-name in a row.
-
-The questions are commands, each with the name at point as default (in a qss
-table: the value or the row at point), and in one keymap for a prefix of one's
-own:
-
-\begin{lstlisting}
-(keymap-global-set "C-c x" qss-xref-command-map)
-\end{lstlisting}
-
-\noindent\begin{tabularx}{\linewidth}{@{}llX@{}}
-\toprule
-\textbf{Key} & \textbf{Command} & \textbf{Shows} \\
-\midrule
-\kbd{u} & \code{qss-xref-uses} & every place a name appears, with the definition it stands in \\
-\kbd{c} & \code{qss-xref-callers} & the functions that call it, after macro expansion \\
-\kbd{e} & \code{qss-xref-callees} & what a function calls \\
-\kbd{d} & \code{qss-xref-definitions} & kind, arglist, line and docstring \\
-\kbd{t} & \code{qss-xref-texts} & the texts a library shows to people \\
-\kbd{k} & \code{qss-xref-categories} & what there is, by category \\
-\kbd{K} & \code{qss-xref-category} & the functions of one category, the most used first \\
-\kbd{i} & \code{qss-elisp-xref-index} & build or update the database \\
-\kbd{m} & \code{qss-xref-mode} & the xref backend on or off \\
-\bottomrule
-\end{tabularx}
-
-\kbd{RET} on a row opens the file at line and column, compressed or not. The
-menu of a row (\kbd{a}, right mouse button) asks the same questions for the
-name in it, so one walks from a use to its callers, from there to their
-callees, and on.
-
-\section{What there is}
-
-Nobody knows all of Emacs Lisp; one cannot ask for what one does not
-know exists. \kbd{M-x qss-xref-categories} lists the categories of
-functions --- the groups of \code{shortdoc}: string, list, buffer,
-file-name, regexp, sequence \ldots{} --- and \kbd{M-x qss-xref-category}
-shows one of them, \textbf{the most used first}:
-
-\begin{Verbatim}
-name          uses  files  sources              summary
-concat       10493   1022  shortdoc,type        Concatenate all the arguments ...
-format        7769    892  param,shortdoc,type  Format a string out of a ...
-string-match  4707    723  param,prefix         Return index of start of first ...
-substring     2855    560  param,shortdoc,type  Return a new string whose ...
-\end{Verbatim}
-
-A function is in a category for one of four reasons, and \code{sources}
-says which: \code{shortdoc} lists it there; the types the native compiler knows
-for it have \code{string} (or list, buffer \ldots) as argument or result
-(\code{type}); its name begins so, \code{string-}, \code{seq-},
-\code{file-name-} (\code{prefix}); a parameter is named so, \code{string},
-\code{str}, \code{s}, \code{seq}, \code{buffer} (\code{param}). The first two
-are sure, the last two good guesses --- which is how one finds
-\code{skip-chars-forward} and \code{regexp-quote} among the string functions,
-and \code{mapconcat} and \code{nreverse} among the sequences.
-
-The uses are counted over all the indexed code: calls, \code{\#'} and macro
-uses, and in how many files. The functions used most are the ones to know
-first; the internal ones (\code{--} in the name) are left out unless asked for
-with \kbd{C-u}. Over Emacs 29.3 there are 1\,195 functions for strings and 118
-for sequences; the 25 used most of them come in 6\,ms. The table
-\code{summaries} has one row per function (kind, arglist, first line of the
-docstring, uses, files) --- the counterpart of Nushell's \code{help commands}
---- and \code{categories} the categories; both are made at the end of each
-index run (some 20\,s more, 7\,MB).
-
-\section{Asking it in Lisp}
-
-\code{(xref "\emph{table}")} is a source: the table of the database. Every
-question is a pipe:
-
-\begin{lstlisting}
-;; who calls string-trim, at the line of the caller's definition
-(qss-display-> (xref "calls") (where (= :callee "string-trim"))
-               (join (xref "definitions") :on ((:file-id :file-id) (:caller :name))
-                     :kind left)
-               (join (xref "files") :on (:file-id :id))
-               (select :library :caller :line :path)
-               (sort-by :caller))
-
-;; the macros used most, over all three million rows
-(qss-display-> (xref "occurrences") (where (= :context "macro-use"))
-               (group-sum :value) (sort-by :count :desc) (first 20))
-
-;; who still uses what became obsolete
-(qss-display-> (xref "occurrences") (where (in :value '("defadvice" "when-let")))
-               (join (xref "files") :on (:file-id :id))
-               (group-sum :origin :package :value) (sort-by :count :desc))
-\end{lstlisting}
-
-The words run as SQL in SQLite; only the rows shown come into Emacs.
-\file{qss-elisp-xref-queries.el} has fifteen such questions, one form each, to
-try with \kbd{C-x C-e}. The database is an ordinary SQLite file, so
-\code{sqlite3} on the command line reads it too.
-
-\section{How fast, and how exact}
-
-Measured over the same Lisp of Emacs 29.3, warm (the files in the page cache),
-the best of three runs; the counts are what each finds.
-
-\noindent\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}Xrrrr@{}}
-\toprule
-& \code{seq-reduce} & \code{string-trim} & \code{gamegrid-set-cell} & \code{message} \\
-\midrule
-\kbd{M-?} on the database & 1\,ms / 26 & 2\,ms / 55 & 1\,ms / 30 & 159\,ms / 5\,747 \\
-\code{rg -w}, sources unpacked & 20\,ms / 26 & 21\,ms / 100 & 21\,ms / 30 & 46\,ms / 18\,230 \\
-\code{grep -rnw}, sources unpacked & 78\,ms / 26 & 61\,ms / 100 & 67\,ms / 30 & 94\,ms / 18\,230 \\
-Emacs' own \kbd{M-?} in the directory, unpacked & 127\,ms / 26 & 86\,ms / 61 & 73\,ms / 30 & 639\,ms / 9\,480 \\
-Emacs' own \kbd{M-?}, \file{.el.gz} as installed & 93\,ms / 0 & 12\,ms / 0 & 11\,ms / 0 & 18\,ms / 237 \\
-\code{zgrep}, \file{.el.gz} as installed & 3.4\,s / 26 & 3.6\,s / 100 & 3.5\,s / 30 & 3.6\,s / 18\,230 \\
-\midrule
-\kbd{M-.} on the database & 1\,ms / 1 & 1\,ms / 1 & 1\,ms / 1 & 1\,ms / 1 \\
-Emacs' own \kbd{M-.} & 1\,ms / 1 & 0\,ms / 1 & 0\,ms / \textbf{0} & 1\,ms / 1 \\
-\midrule
-\code{qss-xref-callers} & 8\,ms / 14 & 10\,ms / 42 & 4\,ms / 15 & 401\,ms / 1\,000\footnotemark \\
-\bottomrule
-\end{tabularx}
-\footnotetext{A table shows at most \code{qss-sql-display-limit} rows.}
-
-What the numbers say:
-
-\begin{itemize}
-\item \textbf{Fast where it counts.} On unpacked files in the cache, ripgrep
-  is fast too. But Emacs installs its Lisp compressed: there Emacs' own
-  \kbd{M-?} finds nothing at all, and \code{zgrep} needs three and a half
-  seconds per name. The database answers in one or two milliseconds.
-\item \textbf{Exact.} For \code{string-trim} grep finds 100 lines: also
-  comments, docstrings, and \code{string-trim-left} (a hyphen ends a word for
-  grep). The database finds the 55 uses in code, each with what it is there.
-  For \code{message}: 5\,747 uses against 18\,230 lines.
-\item \textbf{Not only loaded code.} \code{gamegrid-set-cell} is the function
-  Tetris draws with. As long as \file{gamegrid} is not loaded, Emacs' own
-  \kbd{M-.} does not know it; the database does.
-\item \textbf{Questions grep cannot ask.} Callers after macro expansion,
-  callees, the methods of a generic function with their specializers, the
-  texts of a library, counts over everything: the macros used most, grouped
-  over three million rows, in 2.6\,s; the functions with the most texts in
-  0.4\,s.
-\end{itemize}
-
-% ======================================================================
 \chapter{Reference}\label{chap:reference}
 
 This chapter is written from the code by \file{doc/qss-manual-reference.el}.
@@ -1125,12 +891,16 @@ Little in \qss{} is new; it puts old ideas together in Emacs.
 \file{qss-menu.el} & actions at point, \kbd{a}, the right mouse button, \kbd{w} \\
 \file{qss-edit.el} & changing rows of SQLite tables; \code{update-rows}, \code{delete-rows} \\
 \file{qss-repl.el} & \kbd{M-x qss} \\
-\file{qss-contract.el} & contracts with blame (stands alone) \\
+\file{qss-sql-odbc.el} & ODBC databases as a source and a store (with the package qss-odbc) \\
 \file{qss-interface.el} & the interface of \qss{} with its contracts \\
 \file{qss-examples.el} & \kbd{M-x qss-examples} \\
 \file{doc/} & this manual, its example and the writer of its reference \\
 \bottomrule
 \end{tabularx}
+
+The contracts come from the package \file{qss-contract}; ODBC from
+\file{qss-odbc} (optional); the cross reference of Emacs Lisp is the package
+\file{qss-elisp-xref}, with a manual of its own.
 
 \kbd{M-x qss-run-tests} runs the tests in Emacs; from a shell:
 

@@ -1,4 +1,4 @@
-% Written by qss-manual-reference.el from the code of qss 0.15.0.  Do not edit.
+% Written by qss-manual-reference.el from the code of qss 0.19.0.  Do not edit.
 \section{Words}\label{ref:words}
 \begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.52\linewidth}@{}}
 \toprule
@@ -41,11 +41,11 @@
 \code{files} & \code{qss-files} & Return a table of the files in DIR (default \code{default-directory}). \\
 \code{lines} & \code{qss-lines} & Return the lines of FILE as a table: columns \code{number} and \code{line}. \\
 \code{nu} & \code{qss-nu} & Run the Nushell COMMAND and return its result as a table. \\
+\code{odbc} & \code{qss-odbc-source} & Return the table TABLE of the ODBC data source DSN as a query. \\
 \code{processes} & \code{qss-processes} & Return a table of the running processes (from \code{process-attributes}). \\
 \code{run} & \code{qss-run} & Run PROGRAM with ARGS, without a shell, and return its output as a table. \\
 \code{sqlite} & \code{qss-sqlite} & Return the table TABLE of the SQLite file FILE as a query. \\
 \code{tables} & \code{qss-tables} & Return the tables of the SQLite file FILE (default \code{qss-database}). \\
-\code{xref} & \code{qss-xref-table} & The TABLE of the cross reference database, as a qss query. \\
 \bottomrule
 \end{longtable}
 \section{Options}\label{ref:options}
@@ -60,9 +60,6 @@ All options are in the customization group \code{qss} (\code{M-x customize-group
 \code{qss-copy-format} & \code{text} & Format in which \textbackslash{}\code{w} copies a table; see \code{qss-to}. \\
 \code{qss-data-directory} & \code{nil} & Directory of the SQLite files of qss; nil means \code{user-emacs-directory}. \\
 \code{qss-database} & \code{nil} & The central SQLite file of qss; nil means qss.sqlite3 in \code{qss-data-directory}. \\
-\code{qss-elisp-xref-database} & \code{nil} & The SQLite file of the cross references. \\
-\code{qss-elisp-xref-directories} & \code{nil} & Directories to index, searched recursively. \\
-\code{qss-elisp-xref-skip} & \code{"\textbackslash{}\textbackslash{}(?:-autoloads\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}-pkg\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}loaddefs\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}ldefs-boot\textbackslash{}\textbackslash{}\textbar{}\allowbreak{}\textbackslash{}\textbackslash{}.dir-locals\textbackslash{}\textbackslash{})\textbackslash{}\textbackslash{}.el"} & Regexp of file names not to index (generated files). \\
 \code{qss-max-column-width} & \code{60} & Maximum width of a text column without its own :width, in characters. \\
 \code{qss-menu-label-width} & \code{70} & Maximum width of a label in the actions at point. \\
 \code{qss-nu-arguments} & \code{("--no-config-file")} & Arguments for \code{qss-nu-program} before -c. \\
@@ -72,8 +69,6 @@ All options are in the customization group \code{qss} (\code{M-x customize-group
 \code{qss-repl-max-rows} & \code{30} & Maximum number of rows a table shows inside the qss REPL. \\
 \code{qss-repl-prompt} & \code{"qss\textgreater{} "} & Prompt of the qss REPL. \\
 \code{qss-sql-display-limit} & \code{1000} & Maximum number of rows a query fetches for display. \\
-\code{qss-xref-fallback} & \code{t} & Non-nil means: ask Emacs' own Elisp backend when the database knows nothing. \\
-\code{qss-xref-mode-hook} & \code{nil} & Hook run after entering or leaving \code{qss-xref-mode}. \\
 \bottomrule
 \end{longtable}
 \section{Faces}\label{ref:faces}
@@ -145,7 +140,7 @@ All options are in the customization group \code{qss} (\code{M-x customize-group
 \bottomrule
 \end{longtable}
 \section{Contracts}\label{ref:contracts}
-The 52 functions of the interface with their contracts, as \file{qss-interface.el} defines them.
+The 54 functions of the interface with their contracts, as \file{qss-interface.el} defines them.
 
 \begin{longtable}{@{}p{0.3\linewidth}p{0.64\linewidth}@{}}
 \toprule
@@ -181,6 +176,7 @@ The 52 functions of the interface with their contracts, as \file{qss-interface.e
 \code{qss-nu} & \code{(-\textgreater{} stringp any)} \\
 \code{qss-nu-pipe} & \code{(-\textgreater{} qss-tabular stringp any)} \\
 \code{qss-nuon-read} & \code{(-\textgreater{} stringp any)} \\
+\code{qss-odbc-source} & \code{(-\textgreater{} stringp (opt (or/c stringp symbolp)) (or/c qss-relation-p qss-table-p))} \\
 \code{qss-present} & \code{(-\textgreater{} any (opt qss-presentation-type-name) (opt stringp) any)} \\
 \code{qss-presentation-label}\newline\emph{generic} & \code{(-\textgreater{} any stringp)} \\
 \code{qss-presentation-parse} & \code{(-\textgreater{} qss-presentation-type-name stringp any)} \\
@@ -194,6 +190,7 @@ The 52 functions of the interface with their contracts, as \file{qss-interface.e
 \code{qss-sort-by}\newline\emph{generic} & \code{(-\textgreater{} qss-tabular (rest qss-column-name) qss-result)} \\
 \code{qss-sql} & \code{(-\textgreater{} any stringp)} \\
 \code{qss-sql-name-key} & \code{(-\textgreater{} stringp symbolp)} \\
+\code{qss-sql-relation} & \code{(-\textgreater{} any (or/c stringp symbolp) qss-relation-p)} \\
 \code{qss-sql-rowid} & \code{(-\textgreater{} any (or/c null integerp))} \\
 \code{qss-sql-schema} & \code{(-\textgreater{} stringp (listof (cons/c stringp list)))} \\
 \code{qss-sql-write} & \code{(-\textgreater{} qss-table-p stringp stringp (opt (one-of replace append)) natnump)} \\

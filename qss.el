@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.18.0
+;; Version: 0.19.0
 ;; Package-Requires: ((emacs "29.1") (qss-contract "0.1.0"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -72,6 +72,8 @@
 ;;                    the words update-rows and delete-rows
 ;;   qss-repl.el      M-x qss, the REPL
 ;;   qss-examples.el  M-x qss-examples
+;;   (cross references of all Emacs Lisp, in SQLite, with M-. and M-?:
+;;    the package qss-elisp-xref)
 
 ;;; Code:
 
@@ -85,7 +87,6 @@
 (require 'qss-nu)
 (require 'qss-edit)
 ;; Last: the contracts of the interface, on everything above.
-(require 'qss-elisp-xref-commands)
 (require 'qss-interface)
 
 ;;; Tests
