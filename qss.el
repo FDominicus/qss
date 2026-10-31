@@ -4,7 +4,7 @@
 
 ;; Author: Friedrich Dominicus
 ;; Maintainer: Friedrich Dominicus
-;; Version: 0.19.0
+;; Version: 0.19.1
 ;; Package-Requires: ((emacs "29.1") (qss-contract "0.1.0"))
 ;; Keywords: data, tools, convenience
 ;; URL: https://github.com/FDominicus/qss
@@ -120,6 +120,10 @@ Meant for the command line with -f; the README shows the call.
 Each test is named when it starts, not only when it is done (as ERT
 does), so a test that hangs is the last line on the screen."
   (qss--load-tests)
+  (qss--run-tests-batch))
+
+(defun qss--run-tests-batch ()
+  "Run the loaded tests named qss-... in batch mode, each named as it starts."
   (let* ((total (length (ert-select-tests "^qss-" t)))
          (n 0)
          (announce (lambda (test)
@@ -127,6 +131,64 @@ does), so a test that hangs is the last line on the screen."
                      (message "   start  %d/%d  %s" n total (ert-test-name test)))))
     (advice-add 'ert-run-test :before announce '((name . qss-announce)))
     (ert-run-tests-batch-and-exit "^qss-")))
+
+;;; Tests of all packages: qss and the packages next to it
+
+(defun qss--package-directories ()
+  "The directory of qss and those of the qss packages next to it.
+The packages lie side by side (~/.emacs.d/lib/qss/qss,
+~/.emacs.d/lib/qss/qss-odbc ...); a directory counts if its name
+starts with qss."
+  (let* ((dir (directory-file-name (file-name-directory (locate-library "qss"))))
+         (parent (file-name-directory dir)))
+    (cons (file-name-as-directory dir)
+          (mapcar #'file-name-as-directory
+                  (seq-filter (lambda (d) (and (file-directory-p d)
+                                               (not (file-equal-p d dir))))
+                              (directory-files parent t "\\`qss"))))))
+
+(defun qss--load-all-tests ()
+  "Load the tests of qss and of the qss packages next to it.
+Each package directory goes on the `load-path' first, so its tests find
+their library also in an Emacs started with -Q.  Return a list of
+\(PACKAGE . NUMBER-OF-TEST-FILES)."
+  (require 'ert)
+  (let ((found nil))
+    (dolist (dir (qss--package-directories))
+      (let ((files (directory-files dir t "\\`qss.*-test\\.el\\'")))
+        (add-to-list 'load-path (directory-file-name dir) t)
+        (when files
+          (push (cons (file-name-nondirectory (directory-file-name dir)) (length files)) found))))
+    ;; load after all directories are on the load-path: tests of one
+    ;; package may need another (qss-elisp-xref needs qss-contract)
+    (dolist (dir (qss--package-directories))
+      (dolist (file (directory-files dir t "\\`qss.*-test\\.el\\'"))
+        (load file nil t)))
+    (nreverse found)))
+
+;;;###autoload
+(defun qss-run-all-tests ()
+  "Run the tests of qss and of every qss package next to it.
+The packages are the directories beside the one of qss whose names
+start with qss: qss-contract, qss-odbc, qss-elisp-xref ..."
+  (interactive)
+  (let ((found (qss--load-all-tests)))
+    (message "Tests of %s" (mapconcat (lambda (p) (format "%s (%d files)" (car p) (cdr p)))
+                                      found ", ")))
+  (save-window-excursion
+    (ert-run-tests-interactively "^qss-"))
+  (pop-to-buffer "*ert*"))
+
+;;;###autoload
+(defun qss-run-all-tests-batch ()
+  "Run the tests of qss and of every qss package next to it, in batch mode.
+As `qss-run-tests-batch', for all packages:
+
+  emacs -Q --batch -L ~/.emacs.d/lib/qss/qss -l qss -f qss-run-all-tests-batch"
+  (let ((found (qss--load-all-tests)))
+    (message "Tests of %s" (mapconcat (lambda (p) (format "%s (%d files)" (car p) (cdr p)))
+                                      found ", ")))
+  (qss--run-tests-batch))
 
 (provide 'qss)
 ;;; qss.el ends here

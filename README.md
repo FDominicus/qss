@@ -800,7 +800,15 @@ M-x qss-run-tests
 From a shell, from any directory:
 
 ```
-emacs --batch -L /path/to/qss -l qss -f qss-run-tests-batch
+emacs --batch -L /path/to/qss -L /path/to/qss-contract -l qss -f qss-run-tests-batch
+```
+
+The tests of qss **and of every qss package next to it** (qss-contract,
+qss-odbc, qss-elisp-xref … in the same parent directory) in one run:
+
+```
+M-x qss-run-all-tests
+emacs -Q --batch -L /path/to/qss -l qss-all-tests -f qss-run-all-tests-batch
 ```
 
 The SQLite tests are skipped when Emacs has no SQLite, the Nushell tests
